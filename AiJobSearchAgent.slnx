@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AiJobSearchAgent.Core/AiJobSearchAgent.Core.csproj" />
+    <Project Path="src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AiJobSearchAgent.Tests/AiJobSearchAgent.Tests.csproj" />
+  </Folder>
+</Solution>

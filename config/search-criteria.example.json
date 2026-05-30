@@ -1,0 +1,18 @@
+{
+  "postcode": "MK4 4QG",
+  "radiusMiles": 50,
+  "postedWithinDays": 7,
+  "runAtLocalTime": "10:00",
+  "timeZone": "Europe/London",
+  "titles": [
+    "Senior Software Engineer",
+    "Senior Fullstack Engineer",
+    "Lead Developer",
+    "Senior Software Developer"
+  ],
+  "employmentTypes": ["Permanent", "Contract"],
+  "workModes": ["Remote", "Hybrid", "Office"],
+  "minimumPermanentSalaryGbp": 75000,
+  "minimumContractDayRateGbp": 400,
+  "minimumContractMonths": 6
+}

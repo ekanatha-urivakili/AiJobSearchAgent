@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+reports/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.env
+.env.*
+!.env.example
