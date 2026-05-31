@@ -59,3 +59,50 @@ Run PostgreSQL and the worker container:
 ```bash
 docker compose --profile worker up --build
 ```
+
+## Current Checkout Blockers
+
+This checkout does not currently include the worker source project, solution file, tests, or Dockerfile referenced by `README.md` and `railway.toml`.
+
+Before Railway can deploy the worker, add or restore:
+
+```text
+Dockerfile
+AiJobSearchAgent.slnx
+src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj
+tests/AiJobSearchAgent.Tests/AiJobSearchAgent.Tests.csproj
+```
+
+You can still test PostgreSQL schema initialization locally with:
+
+```bash
+docker compose up -d postgres
+psql "postgres://ai_job_search_agent:change-me-local-only@localhost:5432/ai_job_search_agent" -c "\dt"
+```
+
+You cannot test email ingestion or view crawled jobs from this checkout until the worker and alert inbox adapters exist.
+
+## Post-Deployment Evidence To Share
+
+After deploying to Railway, share:
+
+- Railway project and worker service names.
+- Worker environment variable names with secret values redacted.
+- Confirmation that `sql/init/001_schema.sql` was applied to Railway PostgreSQL.
+- Startup logs showing `DATABASE_URL` connectivity and either the next scheduled run or one completed run.
+- Latest `search_runs` rows:
+
+```sql
+SELECT status, raw_jobs_fetched, jobs_matched, started_at, completed_at
+FROM search_runs
+ORDER BY started_at DESC
+LIMIT 5;
+```
+
+- Current source policy rows:
+
+```sql
+SELECT source_name, fetch_mode, enabled, minimum_delay_seconds, last_reviewed_on
+FROM source_policies
+ORDER BY source_name;
+```

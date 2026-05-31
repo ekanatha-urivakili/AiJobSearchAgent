@@ -1,0 +1,33 @@
+# Build artifacts
+[Bb]in/
+[Oo]bj/
+node_modules/
+dist/
+*.tsbuildinfo
+
+# IDEs and OS files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+.DS_Store?
+._*
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+search-criteria.json
+config/search-criteria.json
+
+# Source control
+.git
+.github
+
+# Documentation and tests (optional, usually excluded to keep image small)
+docs/
+tests/
+README.md
+
+# Logs
+*.log

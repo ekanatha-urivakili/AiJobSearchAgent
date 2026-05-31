@@ -6,17 +6,20 @@ public sealed class JobSearchOrchestrator
     private readonly SourcePolicyGuard policyGuard;
     private readonly JobFilterEngine filterEngine;
     private readonly CvMatchScorer scorer;
+    private readonly IJobDescriptionFetcher descriptionFetcher;
 
     public JobSearchOrchestrator(
         IReadOnlyCollection<IJobSourceAdapter> sources,
         SourcePolicyGuard policyGuard,
         JobFilterEngine filterEngine,
-        CvMatchScorer scorer)
+        CvMatchScorer scorer,
+        IJobDescriptionFetcher? descriptionFetcher = null)
     {
         this.sources = sources;
         this.policyGuard = policyGuard;
         this.filterEngine = filterEngine;
         this.scorer = scorer;
+        this.descriptionFetcher = descriptionFetcher ?? new EmptyJobDescriptionFetcher();
     }
 
     public async Task<SearchRunResult> RunAsync(
@@ -55,7 +58,17 @@ public sealed class JobSearchOrchestrator
                 continue;
             }
 
-            matches.Add(scorer.Score(job, profile));
+            var processedJob = job;
+            if (string.IsNullOrWhiteSpace(job.Description) || job.Description.Length < 100)
+            {
+                var fullDescription = await descriptionFetcher.FetchFullDescriptionAsync(job.Url, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(fullDescription))
+                {
+                    processedJob = job with { Description = fullDescription };
+                }
+            }
+
+            matches.Add(scorer.Score(processedJob, profile));
         }
 
         return new SearchRunResult(

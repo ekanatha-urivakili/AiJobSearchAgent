@@ -51,7 +51,7 @@ public sealed class MarkdownReportGenerator
         foreach (var match in matches)
         {
             var job = match.Job;
-            builder.AppendLine($"### {index}. {job.Title} - {job.Company}");
+            builder.AppendLine($"### {index}. [{job.Title}]({job.Url}) - {job.Company}");
             builder.AppendLine($"- Source: {job.Source}");
             builder.AppendLine($"- Location: {job.Location} / {job.WorkMode}");
             builder.AppendLine($"- Type: {job.EmploymentType}");
@@ -60,7 +60,6 @@ public sealed class MarkdownReportGenerator
             builder.AppendLine($"- Score: {match.Score}");
             builder.AppendLine($"- Why: {string.Join("; ", match.Reasons)}");
             builder.AppendLine($"- Risks: {string.Join("; ", match.Risks)}");
-            builder.AppendLine($"- URL: {job.Url}");
             builder.AppendLine();
             index++;
         }
