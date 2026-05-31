@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-job-search-agent-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_job_search_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_job_search_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://ai_job_search_agent:change-me-local-only@postgres:5432/ai_job_search_agent}
+      JOB_SEARCH_TIME_ZONE: ${JOB_SEARCH_TIME_ZONE:-Europe/London}
+      JOB_SEARCH_RUN_AT: ${JOB_SEARCH_RUN_AT:-10:00}
+    volumes:
+      - ./reports:/app/reports
+    profiles:
+      - worker
+
+volumes:
+  postgres-data:

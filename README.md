@@ -80,9 +80,31 @@ docker build -t ai-job-search-agent .
 docker run --rm ai-job-search-agent
 ```
 
+## Docker Compose With PostgreSQL
+
+Start PostgreSQL:
+
+```bash
+docker compose up -d postgres
+```
+
+Run PostgreSQL and the worker container:
+
+```bash
+docker compose --profile worker up --build
+```
+
+The local PostgreSQL container initializes the schema from `sql/init/001_schema.sql`.
+
+## Railway
+
+Railway deployment uses `railway.toml` and the project `Dockerfile`.
+
+See `/Users/ekanathareddyurivakili/Documents/GitHub/AiJobSearchAgent/docs/railway-deployment.md`.
+
 ## Architecture
 
-See `/Users/ekanathareddyurivakili/Documents/AiJobSearchAgent/docs/job-search-agent-architecture.md`.
+See `/Users/ekanathareddyurivakili/Documents/GitHub/AiJobSearchAgent/docs/job-search-agent-architecture.md`.
 
 ## Roadmap
 
