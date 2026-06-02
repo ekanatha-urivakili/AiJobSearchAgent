@@ -2,29 +2,41 @@ namespace AiJobSearchAgent.Core;
 
 public static class Defaults
 {
-    public static JobSearchCriteria CreateCriteria(DateOnly today) =>
-        new(
+    public static JobSearchCriteria CreateCriteria(DateOnly today)
+    {
+        var postcode = Environment.GetEnvironmentVariable("JOB_SEARCH_POSTCODE") ?? "MK4 4QG";
+        var radius = int.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_RADIUS_MILES"), out var r) ? r : 50;
+        var postedWithin = int.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_POSTED_WITHIN_DAYS"), out var p) ? p : 7;
+        var minSalary = decimal.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_PERMANENT_SALARY_GBP"), out var s) ? s : 75000m;
+        var minRate = decimal.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP"), out var d) ? d : 400m;
+        var minMonths = int.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_CONTRACT_MONTHS"), out var m) ? m : 6;
+
+        return new(
             Titles:
             [
                 "Senior Software Engineer",
                 "Senior Fullstack Engineer",
+                "Senior Software Developer",
                 "Lead Developer",
-                "Senior Software Developer"
+                "Lead Software Engineer",
+                "Principal Engineer",
+                "Principal Developer"
             ],
-            Postcode: "MK4 4QG",
-            RadiusMiles: 50,
-            PostedFrom: today.AddDays(-7),
+            Postcode: postcode,
+            RadiusMiles: radius,
+            PostedFrom: today.AddDays(-postedWithin),
             PostedTo: today,
             EmploymentTypes: [EmploymentType.Permanent, EmploymentType.Contract],
             WorkModes: [WorkMode.Remote, WorkMode.Hybrid, WorkMode.Office],
-            MinimumPermanentSalary: Money.Gbp(75000),
-            MinimumContractDayRate: Money.Gbp(400),
-            MinimumContractMonths: 6);
+            MinimumPermanentSalary: Money.Gbp(minSalary),
+            MinimumContractDayRate: Money.Gbp(minRate),
+            MinimumContractMonths: minMonths);
+    }
 
     public static CvProfile CreateCvProfile() =>
         new(
             Name: "Ekanatha Reddy Urivakili",
-            LocationPostcode: "MK4 4QG",
+            LocationPostcode: Environment.GetEnvironmentVariable("JOB_SEARCH_POSTCODE") ?? "MK4 4QG",
             CoreSkills:
             [
                 "c#",

@@ -36,14 +36,11 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     var policies = Defaults.CreateSourcePolicies();
     var sources = SampleSources.Create(today);
 
-    // Using a shared HttpClient for the fetcher
-    using var httpClient = new HttpClient();
     var orchestrator = new JobSearchOrchestrator(
         sources,
         new SourcePolicyGuard(policies),
         new JobFilterEngine(),
-        new CvMatchScorer(),
-        new SimpleJobDescriptionFetcher(httpClient));
+        new CvMatchScorer());
 
     var result = await orchestrator.RunAsync(criteria, profile, cancellationToken);
     var report = new MarkdownReportGenerator().Generate(result, criteria);

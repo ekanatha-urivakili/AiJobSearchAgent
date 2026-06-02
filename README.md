@@ -100,4 +100,6 @@ The UI expects each result's `url` to be the exact job-description URL from the 
 
 ## Architecture
 
-See `/Users/ekanathareddyurivakili/Documents/AiJobSearchAgent/docs/job-search-agent-architecture.md`.
+See `/Users/ekanathareddyurivakili/Documents/GitHub/AiJobSearchAgent/docs/job-search-agent-architecture.md`.
+
+MCP job-site integration plan: `/Users/ekanathareddyurivakili/Documents/GitHub/AiJobSearchAgent/docs/mcp-job-sites-integration-plan.md`.

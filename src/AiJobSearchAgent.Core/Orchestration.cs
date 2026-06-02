@@ -81,7 +81,7 @@ public sealed class JobSearchOrchestrator
 
     private static IReadOnlyCollection<JobPosting> Deduplicate(IEnumerable<JobPosting> jobs) =>
         jobs
-            .GroupBy(job => $"{job.Company}|{job.Title}|{job.Location}".ToLowerInvariant())
+            .GroupBy(job => $"{job.Source}|{job.SourceJobId}".ToLowerInvariant())
             .Select(group => group.OrderByDescending(job => job.PostedDate).First())
             .ToArray();
 

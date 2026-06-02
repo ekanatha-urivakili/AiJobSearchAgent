@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { jobResults } from "./jobs";
+import { useEffect, useMemo, useState } from "react";
+import { fetchMatches } from "./api";
 import type { EmploymentType, JobResult, WorkMode } from "./types";
 import type { ReactElement } from "react";
 
@@ -95,6 +95,28 @@ function App(): ReactElement {
   const [pageSize, setPageSize] = useState(3);
   const [currentPage, setCurrentPage] = useState(1);
 
+  const [jobResults, setJobResults] = useState<JobResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    fetchMatches().then((result) => {
+      if (!mounted) return;
+      if (result.status === "ok") {
+        setJobResults(result.jobs);
+        setError(null);
+      } else {
+        setError(result.message);
+      }
+      setLoading(false);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const filteredJobs = useMemo(() => {
     const filtered = jobResults.filter((job) => {
       const matchesRecommendation =
@@ -130,7 +152,7 @@ function App(): ReactElement {
   const visibleJobs = filteredJobs.slice(pageStart, pageStart + pageSize);
 
   const recommendedCount = jobResults.filter((job) => job.recommended).length;
-  const averageScore = Math.round(jobResults.reduce((total, job) => total + job.score, 0) / jobResults.length);
+  const averageScore = jobResults.length > 0 ? Math.round(jobResults.reduce((total, job) => total + job.score, 0) / jobResults.length) : 0;
 
   function updateFilter(action: () => void): void {
     action();
@@ -225,21 +247,27 @@ function App(): ReactElement {
       </section>
 
       <section className="results-layout" aria-label="Job results">
-        <div className="results-header">
-          <div className="result-count">
-            <strong>{filteredJobs.length}</strong> matching roles
-            <span>
-              Page {safeCurrentPage} of {pageCount}
-            </span>
-          </div>
-          <Pagination currentPage={safeCurrentPage} pageCount={pageCount} onPageChange={setCurrentPage} />
-        </div>
-        <div className="job-grid">
-          {visibleJobs.map((job) => (
-            <JobCard key={job.id} job={job} />
-          ))}
-        </div>
-        <Pagination currentPage={safeCurrentPage} pageCount={pageCount} onPageChange={setCurrentPage} />
+        {loading && <p className="status-message">Loading job matches…</p>}
+        {!loading && error && <p className="status-message error">Failed to load jobs: {error}</p>}
+        {!loading && !error && (
+          <>
+            <div className="results-header">
+              <div className="result-count">
+                <strong>{filteredJobs.length}</strong> matching roles
+                <span>
+                  Page {safeCurrentPage} of {pageCount}
+                </span>
+              </div>
+              <Pagination currentPage={safeCurrentPage} pageCount={pageCount} onPageChange={setCurrentPage} />
+            </div>
+            <div className="job-grid">
+              {visibleJobs.map((job) => (
+                <JobCard key={job.id} job={job} />
+              ))}
+            </div>
+            <Pagination currentPage={safeCurrentPage} pageCount={pageCount} onPageChange={setCurrentPage} />
+          </>
+        )}
       </section>
     </main>
   );

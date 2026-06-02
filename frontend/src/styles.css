@@ -406,3 +406,13 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+.status-message {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--ink-muted);
+}
+
+.status-message.error {
+  color: var(--amber);
+}

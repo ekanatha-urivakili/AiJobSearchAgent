@@ -2,53 +2,80 @@
 
 ## Current Repository Reality
 
-This checkout currently contains infrastructure and data-model scaffolding only:
+This repository contains a full .NET and React implementation of an automated job search agent:
 
-- `README.md`
-- `docker-compose.yml`
-- `railway.toml`
-- `.env.example`
-- `sql/init/001_schema.sql`
-- `docs/railway-deployment.md`
-
-The README references a .NET worker, tests, solution file, and Dockerfile, but those files are not present in this repository snapshot. The diagrams below document the intended project structure and runtime flow implied by the existing schema, environment variables, and deployment notes.
+- `src/AiJobSearchAgent.Core`: Domain models, filtering, and scoring logic.
+- `src/AiJobSearchAgent.McpServer`: Dual-mode server (MCP STDIO for AI clients, HTTP for the Web UI) with Reed API integration.
+- `src/AiJobSearchAgent.Worker`: Daily scheduler and reporter.
+- `frontend/`: React/Vite/TypeScript dashboard.
+- `tests/AiJobSearchAgent.Tests`: Regression tests for filtering and scoring.
+- `docker-compose.yml` & `Dockerfile`: Containerization.
+- `railway.toml`: Deployment configuration.
+- `sql/init/001_schema.sql`: PostgreSQL schema.
 
 ## High-Level Design
 
 ```mermaid
-flowchart LR
-    Scheduler["Daily scheduler\n10:00 Europe/London"] --> Worker["Job Search Worker"]
-    Worker --> PolicyGuard["Source policy guard"]
-    PolicyGuard --> Reed["Reed alert inbox adapter"]
-    PolicyGuard --> JobServe["JobServe alert inbox adapter"]
-    PolicyGuard -. disabled .-> Indeed["Indeed adapter\nDisabled until approved"]
-    Reed --> Normalizer["Job normalizer"]
-    JobServe --> Normalizer
-    Normalizer --> Filter["Search criteria filter"]
-    Filter --> Scorer["CV keyword scorer"]
-    Scorer --> Store["PostgreSQL"]
-    Store --> Report["Markdown report"]
-    Report --> User["Senior fullstack developer"]
+flowchart TD
+    subgraph Clients["Clients"]
+        WebUI["Web UI\n(React/Vite)"]
+        McpClient["MCP Client\n(Claude Desktop, etc)"]
+    end
+
+    subgraph Server["AiJobSearchAgent.McpServer"]
+        HttpApi["HTTP API\n(--http)"]
+        StdioMcp["STDIO MCP Server\n(default)"]
+        McpService["Job Search Service"]
+    end
+
+    subgraph Orchestration["Core Engine"]
+        Worker["AiJobSearchAgent.Worker\n(Daily Scheduler)"]
+        Orchestrator["Job Search Orchestrator"]
+        Filter["Deterministic Filter"]
+        Scorer["CV Match Scorer"]
+    end
+
+    subgraph Sources["Job Sources"]
+        ReedApi["Reed API Adapter"]
+        JobServe["JobServe Alert Adapter\n(Planned)"]
+        Indeed["Indeed Alert Adapter\n(Planned)"]
+    end
+
+    WebUI --> HttpApi
+    McpClient --> StdioMcp
+    HttpApi --> McpService
+    StdioMcp --> McpService
+    McpService --> Orchestrator
+    Worker --> Orchestrator
+
+    Orchestrator --> ReedApi
+    Orchestrator --> Filter
+    Orchestrator --> Scorer
+    
+    Orchestrator --> PostgreSQL[("PostgreSQL\n(Planned for persistence)")]
+    Orchestrator --> Reports["Markdown Reports"]
 ```
 
 ## Deployment View
 
 ```mermaid
 flowchart TB
-    subgraph Local["Local"]
-        LocalWorker["dotnet worker or worker container"]
+    subgraph Local["Local Development"]
+        DevMcp["dotnet run McpServer"]
+        DevWorker["dotnet run Worker"]
+        DevUI["npm run dev"]
         LocalPg["Docker PostgreSQL"]
-        LocalReports["./reports"]
-        LocalWorker --> LocalPg
-        LocalWorker --> LocalReports
+        DevMcp --> LocalPg
+        DevWorker --> LocalPg
+        DevUI -- fetch --> DevMcp
     end
 
-    subgraph Railway["Railway"]
-        RailwayWorker["Worker service\nDockerfile start command"]
+    subgraph Railway["Railway Production"]
+        RailwayMcp["McpServer Service\n(HTTP Mode)"]
+        RailwayWorker["Worker Service\n(Scheduled Mode)"]
         RailwayPg["Managed PostgreSQL"]
-        RailwayLogs["Railway logs"]
+        RailwayMcp --> RailwayPg
         RailwayWorker --> RailwayPg
-        RailwayWorker --> RailwayLogs
     end
 ```
 
@@ -56,36 +83,29 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    App["Worker entrypoint"] --> Config["Configuration loader"]
-    Config --> SearchCriteria["Search criteria"]
-    Config --> ScheduleOptions["Schedule options"]
-    Config --> DatabaseOptions["Database options"]
-    App --> Runner["Search run orchestrator"]
-    Runner --> SourcePolicyRepository["Source policy repository"]
-    Runner --> SourceAdapters["Source adapters"]
-    SourceAdapters --> RawJobs["Raw source jobs"]
-    RawJobs --> JobMapper["Job mapper"]
-    JobMapper --> JobPosting["JobPosting model"]
-    JobPosting --> CriteriaEvaluator["Criteria evaluator"]
-    CriteriaEvaluator --> MatchCandidate["Match candidate"]
-    MatchCandidate --> CvScorer["CV keyword scorer"]
-    CvScorer --> MatchResult["Match result"]
-    MatchResult --> Persistence["PostgreSQL persistence"]
-    Persistence --> Reporter["Markdown report writer"]
+    App["Entrypoint"] --> Config["Configuration\n(Env Vars)"]
+    Config --> Criteria["Search Criteria"]
+    App --> Orchestrator["Orchestrator"]
+    Orchestrator --> Policy["Source Policy Guard"]
+    Orchestrator --> Adapters["Source Adapters"]
+    Adapters --> RawJobs["Raw Job Postings"]
+    RawJobs --> Filter["Job Filter Engine"]
+    Filter --> Scorer["CV Match Scorer"]
+    Scorer --> Match["Job Match"]
+    Match --> Dedupe["Deduplicator\n(Source|SourceJobId)"]
+    Dedupe --> Report["Report Generator"]
 ```
 
 ### Core Components
 
-| Component | Responsibility | Backing Evidence |
+| Component | Responsibility | Status |
 |---|---|---|
-| Worker entrypoint | Run once or continuously on a schedule. | `README.md:22`, `README.md:28`, `railway.toml:6` |
-| Configuration loader | Read search, schedule, and database settings. | `.env.example:1` |
-| Source policy guard | Enforce allowed/disabled source behavior and delays. | `sql/init/001_schema.sql:58` |
-| Source adapters | Fetch source-specific job alerts. | `README.md:7` |
-| Criteria evaluator | Apply location, date, salary, rate, duration, title, and work-mode filters. | `README.md:14` |
-| CV scorer | Score filtered jobs against the CV profile. | `README.md:9` |
-| Persistence | Store runs, fetches, postings, matches, and seen history. | `sql/init/001_schema.sql:1` |
-| Reporter | Produce a human-readable Markdown report. | `README.md:10` |
+| Core Engine | Filtering, scoring, and orchestration. | Production-ready |
+| MCP Server | Provides tools/resources to AI clients via STDIO. | Live (Reed only) |
+| HTTP API | Provides data to the Web UI. | Live (in McpServer) |
+| Worker | Daily scheduled runs and local reports. | Live |
+| Reed Adapter | Fetches and maps jobs from Reed API. | Live |
+| Deduplicator | Ensures unique results by source job ID. | Live |
 
 ## Data Model
 
@@ -104,17 +124,6 @@ erDiagram
         text status
         int raw_jobs_fetched
         int jobs_matched
-    }
-
-    source_fetches {
-        uuid id PK
-        uuid search_run_id FK
-        text source_name
-        text fetch_mode
-        text status
-        int jobs_fetched
-        text warning
-        text error
     }
 
     job_postings {
@@ -146,54 +155,28 @@ erDiagram
         jsonb reasons
         jsonb risks
     }
-
-    job_seen_history {
-        uuid id PK
-        uuid job_posting_id FK
-        text content_hash
-        timestamptz reported_at
-    }
-
-    source_policies {
-        text source_name PK
-        text fetch_mode
-        boolean enabled
-        int minimum_delay_seconds
-        date last_reviewed_on
-    }
 ```
 
-## Run Sequence
+## Run Sequence (HTTP/MCP)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant User
-    participant Worker
-    participant DB as PostgreSQL
-    participant Policy as Source Policy Guard
-    participant Source as Job Source Adapter
-    participant Scorer as Filter and CV Scorer
-    participant Report as Markdown Reporter
+    participant Client as Web UI / MCP Client
+    participant Server as McpServer
+    participant Orchestrator
+    participant Source as Reed API
+    participant Scorer as Filter/Scorer
 
-    User->>Worker: Start once or start scheduled mode
-    Worker->>DB: Insert search_runs row
-    Worker->>DB: Load source_policies
-    Worker->>Policy: Check enabled source and fetch mode
-    alt Source enabled
-        Policy->>Source: Fetch alert jobs
-        Source-->>Worker: Raw jobs
-        Worker->>DB: Upsert job_postings
-        Worker->>Scorer: Apply criteria and CV scoring
-        Scorer-->>Worker: Match results
-        Worker->>DB: Insert job_matches and job_seen_history
-        Worker->>Report: Generate report
-        Report-->>User: Markdown report
-    else Source disabled
-        Policy-->>Worker: Skip source with warning
-        Worker->>DB: Insert source_fetches warning
-    end
-    Worker->>DB: Complete search_runs row
+    Client->>Server: Request Search (HTTP or MCP Tool)
+    Server->>Orchestrator: RunAsync(Criteria)
+    Orchestrator->>Source: FetchAsync
+    Source-->>Orchestrator: JobPostings
+    Orchestrator->>Scorer: Evaluate & Score
+    Scorer-->>Orchestrator: JobMatches
+    Orchestrator->>Orchestrator: Deduplicate (Source|ID)
+    Orchestrator-->>Server: SearchRunResult
+    Server-->>Client: Matches & Report Link
 ```
 
 ## Job Evaluation Flow
@@ -220,84 +203,8 @@ flowchart TD
     Recommend -- No --> StoreRisk["Store match with risks"]
 ```
 
-## Railway Flow
+## Architecture Documentation
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Dev as Developer
-    participant GitHub
-    participant Railway
-    participant Worker as Worker Service
-    participant PG as Railway PostgreSQL
+See `docs/job-search-agent-architecture.md` (this file).
 
-    Dev->>GitHub: Push repository
-    Railway->>GitHub: Build from repository
-    Dev->>Railway: Add PostgreSQL service
-    Dev->>Railway: Configure worker environment variables
-    Dev->>PG: Apply sql/init/001_schema.sql
-    Railway->>Worker: Deploy Docker worker
-    Worker->>PG: Connect using DATABASE_URL
-    Worker-->>Railway: Log next scheduled run
-```
-
-## What To Provide After Railway Deployment
-
-Provide these artifacts so another senior developer can verify the deployment quickly:
-
-- Railway project name and worker service name.
-- Worker service environment variable list with secret values redacted.
-- PostgreSQL service name and confirmation that `sql/init/001_schema.sql` was applied.
-- Latest worker deployment logs from startup through either the scheduled wait message or one completed run.
-- A database snapshot query result:
-
-```sql
-SELECT status, raw_jobs_fetched, jobs_matched, started_at, completed_at
-FROM search_runs
-ORDER BY started_at DESC
-LIMIT 5;
-```
-
-- Source policy state:
-
-```sql
-SELECT source_name, fetch_mode, enabled, minimum_delay_seconds, last_reviewed_on
-FROM source_policies
-ORDER BY source_name;
-```
-
-- Generated report file path or Railway volume/artifact location, if report persistence is configured.
-- Confirmation of how job-source credentials or alert inbox access are configured, with secrets redacted.
-
-## Local Testing Status
-
-You can test PostgreSQL schema initialization locally now:
-
-```bash
-docker compose up -d postgres
-```
-
-Then inspect the initialized tables:
-
-```bash
-psql "postgres://ai_job_search_agent:change-me-local-only@localhost:5432/ai_job_search_agent" -c "\dt"
-```
-
-You cannot currently run the worker locally from this checkout because the referenced .NET source files, solution file, tests, and Dockerfile are absent. Specifically, these README commands require files that are not present:
-
-- `src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj`
-- `tests/AiJobSearchAgent.Tests/AiJobSearchAgent.Tests.csproj`
-- `AiJobSearchAgent.slnx`
-- `Dockerfile`
-
-You also cannot see emails directly from existing crawled jobs yet from this checkout because there is no email or alert inbox adapter implementation present. The current schema supports storing crawled jobs and matches once a worker exists, but it does not itself fetch emails or crawl job boards.
-
-## Minimum Implementation Backlog
-
-1. Add the .NET worker project and solution referenced by `README.md`.
-2. Add source adapters for Reed and JobServe alert inbox ingestion.
-3. Add a source policy guard backed by `source_policies`.
-4. Add persistence for `search_runs`, `source_fetches`, `job_postings`, `job_matches`, and `job_seen_history`.
-5. Add Markdown report generation to `reports/`.
-6. Add a `Dockerfile` that matches `railway.toml`.
-7. Add smoke tests for configuration, criteria filtering, scoring, and schema connectivity.
+MCP job-site integration plan: `docs/mcp-job-sites-integration-plan.md`.

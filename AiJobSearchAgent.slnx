@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AiJobSearchAgent.Core/AiJobSearchAgent.Core.csproj" />
+    <Project Path="src/AiJobSearchAgent.McpServer/AiJobSearchAgent.McpServer.csproj" />
     <Project Path="src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">

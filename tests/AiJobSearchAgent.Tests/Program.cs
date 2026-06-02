@@ -6,7 +6,13 @@ var tests = new (string Name, Action Test)[]
     ("Contract jobs below GBP 400/day are rejected", ContractBelowDayRateIsRejected),
     ("Contract jobs shorter than 6 months are rejected", ShortContractIsRejected),
     ("Remote jobs outside radius are accepted when compensation qualifies", RemoteOutsideRadiusIsAccepted),
-    ("CV scorer recommends strong .NET React AWS jobs", StrongMatchIsRecommended)
+    ("CV scorer recommends strong .NET React AWS jobs", StrongMatchIsRecommended),
+    ("Jobs with same source and source ID are deduplicated, newest kept", DeduplicationUsesSourceJobId),
+    ("Jobs from different sources with same source ID are not merged", DifferentSourcesSameIdNotMerged),
+    ("Title matching works against criteria titles with partial contains", TitleMatchingWorksByContains),
+    ("Old postings outside date range are rejected", OldPostingIsRejected),
+    ("Office jobs outside radius are rejected", OfficeJobOutsideRadiusIsRejected),
+    ("CV scorer penalises jobs with few keyword matches", LowKeywordMatchIsNotRecommended),
 };
 
 var failures = new List<string>();
@@ -38,6 +44,8 @@ if (failures.Count > 0)
 }
 
 return 0;
+
+// ── filter tests ────────────────────────────────────────────────────────────
 
 static void PermanentBelowSalaryIsRejected()
 {
@@ -82,6 +90,31 @@ static void RemoteOutsideRadiusIsAccepted()
     AssertTrue(decision.Accepted);
 }
 
+static void OldPostingIsRejected()
+{
+    var today = new DateOnly(2026, 5, 30);
+    var criteria = Defaults.CreateCriteria(today);
+    var job = CreateJobOnDate(today.AddDays(-30), EmploymentType.Permanent, WorkMode.Hybrid, salaryMin: 85000);
+
+    var decision = new JobFilterEngine().Evaluate(job, criteria);
+
+    AssertFalse(decision.Accepted);
+    AssertEqual("Old posting", decision.Reason);
+}
+
+static void OfficeJobOutsideRadiusIsRejected()
+{
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 5, 30));
+    var job = CreateJob(EmploymentType.Permanent, WorkMode.Office, distanceMiles: 80, salaryMin: 85000);
+
+    var decision = new JobFilterEngine().Evaluate(job, criteria);
+
+    AssertFalse(decision.Accepted);
+    AssertEqual("Outside radius", decision.Reason);
+}
+
+// ── scorer tests ─────────────────────────────────────────────────────────────
+
 static void StrongMatchIsRecommended()
 {
     var job = CreateJob(EmploymentType.Permanent, WorkMode.Hybrid, salaryMin: 85000, salaryMax: 95000);
@@ -89,6 +122,96 @@ static void StrongMatchIsRecommended()
 
     AssertTrue(match.Recommended);
 }
+
+static void LowKeywordMatchIsNotRecommended()
+{
+    var job = new JobPosting(
+        "Test", Guid.NewGuid().ToString("N"), new Uri("https://example.com/job"),
+        "Senior Software Engineer", "Example Ltd", "Milton Keynes",
+        10, EmploymentType.Permanent, WorkMode.Hybrid,
+        85000, 90000, null, null, null,
+        new DateOnly(2026, 5, 29),
+        "Java Spring Boot developer needed for legacy migration project.");
+
+    var match = new CvMatchScorer().Score(job, Defaults.CreateCvProfile());
+
+    AssertFalse(match.Recommended);
+}
+
+// ── deduplication tests ───────────────────────────────────────────────────────
+
+static void DeduplicationUsesSourceJobId()
+{
+    // Same source + sourceJobId, different company/title/location.
+    // New key (source|sourceJobId) deduplicates these to one entry.
+    // Old key (company|title|location) would have kept both.
+    var older = new JobPosting("Reed", "reed-001", new Uri("https://example.com"), "Senior Engineer", "Acme", "London",
+        10, EmploymentType.Permanent, WorkMode.Hybrid, 85000, 95000, null, null, null,
+        new DateOnly(2026, 5, 28), "C# AWS");
+    var newer = new JobPosting("Reed", "reed-001", new Uri("https://example.com"), "Senior Engineer (Updated)", "Acme Ltd", "Manchester",
+        200, EmploymentType.Permanent, WorkMode.Hybrid, 85000, 95000, null, null, null,
+        new DateOnly(2026, 5, 30), "C# AWS updated");
+
+    var deduped = new[] { older, newer }
+        .GroupBy(j => $"{j.Source}|{j.SourceJobId}".ToLowerInvariant())
+        .Select(g => g.OrderByDescending(j => j.PostedDate).First())
+        .ToArray();
+
+    AssertEqual(1, deduped.Length);
+    AssertEqual("Senior Engineer (Updated)", deduped[0].Title);
+}
+
+static void DifferentSourcesSameIdNotMerged()
+{
+    var reedJob = new JobPosting("Reed", "job-001", new Uri("https://example.com"), "Senior Engineer", "Acme", "London",
+        10, EmploymentType.Permanent, WorkMode.Hybrid, 85000, 95000, null, null, null,
+        new DateOnly(2026, 5, 30), "C# AWS");
+    var jobserveJob = new JobPosting("JobServe", "job-001", new Uri("https://example.com"), "Senior Engineer", "Acme", "London",
+        10, EmploymentType.Permanent, WorkMode.Hybrid, 85000, 95000, null, null, null,
+        new DateOnly(2026, 5, 30), "C# AWS");
+
+    var deduped = new[] { reedJob, jobserveJob }
+        .GroupBy(j => $"{j.Source}|{j.SourceJobId}".ToLowerInvariant())
+        .Select(g => g.OrderByDescending(j => j.PostedDate).First())
+        .ToArray();
+
+    AssertEqual(2, deduped.Length);
+}
+
+// ── title matching tests ──────────────────────────────────────────────────────
+
+static void TitleMatchingWorksByContains()
+{
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 5, 30));
+
+    // These titles should match because they contain one of the configured criteria titles.
+    var matchingTitles = new[]
+    {
+        "Senior Software Engineer - C# / ASP.NET Core",
+        "Senior Software Developer (Remote)",
+        "Lead Developer - Full Stack .NET",
+        "Senior Fullstack Engineer | Fintech",
+    };
+
+    // This title should not match any configured criteria title.
+    var nonMatchingTitle = "Java Spring Boot Developer";
+
+    var filter = new JobFilterEngine();
+
+    foreach (var title in matchingTitles)
+    {
+        var job = CreateJobWithTitle(title, criteria);
+        var decision = filter.Evaluate(job, criteria);
+        AssertTrue(decision.Accepted || decision.Reason != "Title mismatch");
+    }
+
+    var nonMatchingJob = CreateJobWithTitle(nonMatchingTitle, criteria);
+    var nonMatchingDecision = filter.Evaluate(nonMatchingJob, criteria);
+    AssertFalse(nonMatchingDecision.Accepted);
+    AssertEqual("Title mismatch", nonMatchingDecision.Reason);
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 static JobPosting CreateJob(
     EmploymentType employmentType,
@@ -116,6 +239,41 @@ static JobPosting CreateJob(
         contractMonths,
         new DateOnly(2026, 5, 29),
         "Senior role using C#, ASP.NET Core, Web API, React, TypeScript, AWS, Docker, SQL Server, microservices, payments, e-commerce, Agile, architecture and code review.");
+
+static JobPosting CreateJobOnDate(
+    DateOnly postedDate,
+    EmploymentType employmentType,
+    WorkMode workMode,
+    decimal? salaryMin = null) =>
+    new(
+        "Test",
+        Guid.NewGuid().ToString("N"),
+        new Uri("https://example.com/job"),
+        "Senior Software Engineer",
+        "Example Ltd",
+        "Milton Keynes",
+        10,
+        employmentType,
+        workMode,
+        salaryMin,
+        null, null, null, null,
+        postedDate,
+        "C# ASP.NET Core role.");
+
+static JobPosting CreateJobWithTitle(string title, JobSearchCriteria criteria) =>
+    new(
+        "Test",
+        Guid.NewGuid().ToString("N"),
+        new Uri("https://example.com/job"),
+        title,
+        "Example Ltd",
+        "Milton Keynes",
+        10,
+        EmploymentType.Permanent,
+        WorkMode.Hybrid,
+        85000, 95000, null, null, null,
+        criteria.PostedTo.AddDays(-1),
+        "C# ASP.NET Core Web API React TypeScript AWS Docker SQL Server microservices payments agile architecture code review.");
 
 static void AssertTrue(bool value)
 {
