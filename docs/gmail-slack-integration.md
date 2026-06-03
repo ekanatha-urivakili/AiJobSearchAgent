@@ -1,10 +1,24 @@
 # Gmail & Slack Integration — Architecture Design
 
-**Status:** Draft for review  
+**Status:** Historical design review; implementation now uses Google service-account JSON and Slack incoming webhooks.
 **Date:** 2026-06-02  
 **Author:** Principal Engineering Review
 
 ---
+
+## Current Implementation Note
+
+The live code uses `GMAIL_CREDENTIALS_JSON` with `GoogleCredential.FromJson(...)`, not the OAuth refresh-token variables proposed in the original review below. Use this document for design context, but use `README.md` and `.env.example` as the source of truth for current setup.
+
+Current variables:
+
+| Variable | Required | Notes |
+|---|---:|---|
+| `GMAIL_CREDENTIALS_JSON` | Yes, if Gmail/Indeed alert ingestion is enabled | Service-account JSON, pasted as one value. |
+| `GMAIL_SEARCH_QUERY` | No | Default Gmail alert search. |
+| `INDEED_GMAIL_SEARCH_QUERY` | No | Targets Indeed job alert emails. |
+| `SLACK_WEBHOOK_URL` | No | Posts high-score matches when configured. |
+| `SETTINGS_ENCRYPTION_KEY` | Yes, if saving secrets from Settings UI | 32-byte base64 key generated with `openssl rand -base64 32`. |
 
 ## 1. Architectural Opinion on the Submitted Plan
 
@@ -14,7 +28,7 @@ The submitted plan is directionally correct. The `IJobSourceAdapter` reuse for G
 
 | # | Decision | Recommendation | Risk if Deferred |
 |---|----------|----------------|-----------------|
-| D-1 | Gmail auth strategy | Offline OAuth with stored refresh token (file in dev, base64 env var in CI/Railway). **Not** Service Account — Gmail API only supports SA for Google Workspace domains, not personal Gmail. | Wrong auth strategy means complete rewrite of credential handling |
+| D-1 | Gmail auth strategy | Implemented with `GMAIL_CREDENTIALS_JSON` service-account JSON. For personal Gmail, use an account/workspace setup that grants the service account the required read access. | Wrong auth strategy means complete rewrite of credential handling |
 | D-2 | Reporter invocation point | Reporters should be called from the **Worker** (`Program.cs`), not injected into `JobSearchOrchestrator`. Orchestrator's responsibility stops at `SearchRunResult`. | Violates single responsibility; Orchestrator becomes aware of I/O concerns |
 | D-3 | Per-provider email parser | Implement a `Dictionary<string, IEmailBodyParser>` keyed on sender domain. One parser per provider. **Not** a single monolithic parser. | Adding a second provider (Indeed, LinkedIn) requires touching existing parsing code |
 | D-4 | Cross-source deduplication | Gmail-parsed jobs need a deterministic `SourceJobId` derived from the job URL (e.g. `SHA256(url)[0..8]`). Otherwise the existing `Deduplicate()` in `JobSearchOrchestrator` won't catch overlap with API-sourced jobs from the same provider. | Duplicate jobs appear in output; user gets confused |
@@ -46,16 +60,16 @@ C4Context
 
     System(agent, "AiJobSearchAgent", "Searches, scores, and reports job matches")
 
-    System_Ext(gmail, "Gmail", "Receives job alert emails from Reed, JobServe, Indeed, LinkedIn")
+    System_Ext(gmail, "Gmail", "Receives job alert emails for Gmail and Indeed adapters")
     System_Ext(reed_api, "Reed API", "Approved job search API")
     System_Ext(slack, "Slack", "Team/personal workspace for notifications")
-    System_Ext(google_oauth, "Google OAuth 2.0", "Issues access tokens for Gmail API")
+    System_Ext(google_identity, "Google Identity", "Authenticates service-account JSON for Gmail API")
 
     Rel(user, agent, "Triggers daily via GitHub Actions / schedule flag")
     Rel(agent, gmail, "Reads unread job alert emails", "Gmail API v1 (HTTPS)")
     Rel(agent, reed_api, "Searches for jobs matching criteria", "HTTPS REST")
     Rel(agent, slack, "Posts high-score matches", "Incoming Webhook (HTTPS POST)")
-    Rel(agent, google_oauth, "Exchanges refresh token for access token", "HTTPS")
+    Rel(agent, google_identity, "Authenticates service-account credentials", "HTTPS")
     Rel(gmail, user, "Email alerts from job boards", "SMTP")
 ```
 
@@ -91,7 +105,6 @@ graph TB
             GCA["GoogleCredentialAuthenticator"]
             PRP["ProviderParserRegistry"]
             REP["ReedEmailParser"]
-            JSP["JobServeEmailParser"]
         end
     end
 
@@ -104,7 +117,6 @@ graph TB
     GJSA --> GCA
     GJSA --> PRP
     PRP --> REP
-    PRP --> JSP
 
     JO --> ISA
     JO --> SPG
@@ -138,8 +150,8 @@ sequenceDiagram
 
     loop For each enabled source
         JO->>GJSA: FetchAsync(criteria, ct)
-        GJSA->>GAuth: GetAccessTokenAsync()
-        GAuth-->>GJSA: access_token (from refresh token)
+        GJSA->>GAuth: Authenticate service-account JSON
+        GAuth-->>GJSA: Gmail service credential
         GJSA->>GmailAPI: users.messages.list (label:job-alerts is:unread)
         GmailAPI-->>GJSA: [messageId, ...]
         loop For each message
@@ -290,11 +302,6 @@ classDiagram
         -ParseJobBlock(node, today) JobPosting?
     }
 
-    class JobServeEmailParser {
-        +SenderDomain string = "jobserve.com"
-        +Parse(htmlBody, today) IReadOnlyCollection~JobPosting~
-    }
-
     class GoogleCredentialProvider {
         -string refreshToken
         -string clientId
@@ -312,7 +319,6 @@ classDiagram
     GmailAlertJobSourceAdapter --> IGoogleCredentialProvider
     ProviderParserRegistry --> IEmailBodyParser
     IEmailBodyParser <|.. ReedEmailParser
-    IEmailBodyParser <|.. JobServeEmailParser
     IGoogleCredentialProvider <|.. GoogleCredentialProvider
 ```
 
@@ -320,46 +326,39 @@ classDiagram
 
 ### 3.3 Gmail Authentication Flow
 
-The worker runs unattended (GitHub Actions / Railway). OAuth with a **stored refresh token** is the only viable approach for a personal Gmail account.
+The worker runs unattended. The implemented adapter reads `GMAIL_CREDENTIALS_JSON` and creates Google credentials from the configured service-account JSON.
 
 ```mermaid
 sequenceDiagram
-    participant Dev as Developer (one-time setup)
-    participant Browser as Browser
+    participant Dev as Developer
     participant GConsole as Google Cloud Console
-    participant OAuthHelper as OAuthSetupHelper (CLI tool or script)
-    participant GAuth as Google OAuth 2.0
+    participant Gmail as Gmail API
     participant EnvStore as .env / Railway Secret
+    participant Worker as AiJobSearchAgent.Worker
 
-    Dev->>GConsole: Create OAuth 2.0 Client ID (Desktop type)
-    GConsole-->>Dev: client_id, client_secret
+    Dev->>GConsole: Create service account and JSON key
+    GConsole-->>Dev: service-account JSON
+    Dev->>EnvStore: Store GMAIL_CREDENTIALS_JSON
+    Dev->>EnvStore: Store GMAIL_SEARCH_QUERY / INDEED_GMAIL_SEARCH_QUERY
 
-    Dev->>OAuthHelper: Run setup helper with client_id + client_secret
-    OAuthHelper->>GAuth: Authorization URL (scope: gmail.readonly, gmail.labels)
-    GAuth-->>Browser: Redirect to consent screen
-    Browser->>Dev: User grants consent
-    GAuth-->>OAuthHelper: authorization_code
-    OAuthHelper->>GAuth: Exchange code for tokens
-    GAuth-->>OAuthHelper: access_token + refresh_token
+    Worker->>EnvStore: Read service-account JSON
+    Worker->>Gmail: Authenticate and query unread job alerts
+    Gmail-->>Worker: Alert email messages
 
-    OAuthHelper-->>Dev: Print refresh_token
-    Dev->>EnvStore: Store GMAIL_REFRESH_TOKEN, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET
-
-    Note over Dev,EnvStore: One-time setup complete. Worker uses refresh token at runtime.
+    Note over Dev,EnvStore: Grant the service account the required Gmail read access before deployment.
 ```
 
-**Runtime token refresh (per-run):**
+**Runtime service-account authentication (per-run):**
 
 ```mermaid
 sequenceDiagram
     participant GJSA as GmailAlertJobSourceAdapter
     participant GCP as GoogleCredentialProvider
-    participant GAuth as Google OAuth Token Endpoint
+    participant Gmail as Gmail API
 
-    GJSA->>GCP: GetAccessTokenAsync()
-    GCP->>GAuth: POST /token (grant_type=refresh_token, refresh_token, client_id, client_secret)
-    GAuth-->>GCP: { access_token, expires_in }
-    GCP-->>GJSA: access_token
+    GJSA->>GCP: Load GMAIL_CREDENTIALS_JSON
+    GCP->>Gmail: Authenticate service account
+    Gmail-->>GJSA: Authorized Gmail service
 ```
 
 ---
@@ -469,41 +468,40 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 
 | Variable | Required | Example | Notes |
 |----------|----------|---------|-------|
-| `GMAIL_CLIENT_ID` | Yes (if Gmail enabled) | `123456.apps.googleusercontent.com` | From Google Cloud Console |
-| `GMAIL_CLIENT_SECRET` | Yes (if Gmail enabled) | `GOCSPX-xxxx` | From Google Cloud Console |
-| `GMAIL_REFRESH_TOKEN` | Yes (if Gmail enabled) | `1//0g...` | Generated via one-time setup helper |
-| `GMAIL_QUERY` | No | `label:job-alerts is:unread` | Default shown; override to restrict scope |
+| `GMAIL_CREDENTIALS_JSON` | Yes (if Gmail enabled) | `{"type":"service_account",...}` | Google service-account JSON as one value |
+| `GMAIL_SEARCH_QUERY` | No | `label:job-alerts is:unread` | Default shown; override to restrict scope |
+| `INDEED_GMAIL_SEARCH_QUERY` | No | `from:jobalerts-noreply@indeed.com is:unread` | Used by the Indeed alert adapter |
 | `SLACK_WEBHOOK_URL` | Yes (if Slack enabled) | `https://hooks.slack.com/services/T.../B.../xxx` | Incoming webhook URL from Slack app |
-| `SLACK_MIN_SCORE` | No | `70` | Default 70; only posts matches at or above this score |
+| `SETTINGS_ENCRYPTION_KEY` | Yes, if saving secrets from Settings UI | output of `openssl rand -base64 32` | Encrypts secret settings in PostgreSQL |
 
 #### Updated `.env.example` additions:
 
 ```
 # Gmail Integration (AlertInbox mode)
-# GMAIL_CLIENT_ID=
-# GMAIL_CLIENT_SECRET=
-# GMAIL_REFRESH_TOKEN=
-# GMAIL_QUERY=label:job-alerts is:unread
+# GMAIL_CREDENTIALS_JSON=
+# GMAIL_SEARCH_QUERY=label:job-alerts is:unread
+# INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 
 # Slack Integration
 # SLACK_WEBHOOK_URL=
-# SLACK_MIN_SCORE=70
 ```
 
 ---
 
 ### 3.8 Source Policy Alignment
 
-The existing `Defaults.CreateSourcePolicies()` already marks Reed and JobServe as `FetchMode.AlertInbox`. The Gmail adapter must use the same source names as those policies so `SourcePolicyGuard.CanFetch()` allows them through.
+The current source policies include Reed, Gmail Alerts, and Indeed UK. Gmail-backed adapters must use the same source names as those policies so `SourcePolicyGuard.CanFetch()` allows them through.
 
 ```mermaid
 flowchart LR
-    A["SourcePolicy('Reed', AlertInbox, Enabled=true)"] --> B{SourcePolicyGuard}
-    C["GmailAlertJobSourceAdapter\nSourceName='Reed'"] --> B
-    B --> D[CanFetch → Allowed]
+    A["SourcePolicy('Gmail Alerts', AlertInbox, Enabled=true)"] --> B{SourcePolicyGuard}
+    C["GmailAlertJobSourceAdapter\nSourceName='Gmail Alerts'"] --> B
+    D["SourcePolicy('Indeed UK', AlertInbox, Enabled=true)"] --> B
+    E["IndeedAlertJobSourceAdapter\nSourceName='Indeed UK'"] --> B
+    B --> F["CanFetch → Allowed"]
 ```
 
-**Note:** `GmailAlertJobSourceAdapter` is a single adapter that may return jobs from multiple providers (Reed, JobServe) based on which emails are in the inbox. The adapter's `SourceName` property should be set per-job (the `Source` field on `JobPosting`), not globally. Alternatively, register one `GmailAlertJobSourceAdapter` per provider, each with a matching `SourceName`.
+**Note:** Gmail-backed adapters return jobs only for their configured policy source. `GmailAlertJobSourceAdapter` reports generic Gmail alerts and `IndeedAlertJobSourceAdapter` reports Indeed UK alerts.
 
 **Decision:** Register one adapter per provider. Simpler policy matching, clearer error reporting.
 
@@ -545,7 +543,7 @@ flowchart LR
 |------|------|--------|
 | 3.1 | `Tests/SlackJobReporterTests.cs` | Mock `HttpClient`; assert payload shape for score >= 70, empty case, failure isolation |
 | 3.2 | `Tests/ReedEmailParserTests.cs` | Parse fixture HTML from `TestData/reed-alert-sample.html` |
-| 3.3 | `Tests/GoogleCredentialProviderTests.cs` | Mock HTTP; assert token exchange request shape |
+| 3.3 | `Tests/GoogleCredentialProviderTests.cs` | Assert service-account JSON is loaded and auth failures are isolated |
 | 3.4 | `.env.example` | Add new variables (documented above) |
 | 3.5 | `.github/workflows/daily-job-search.yml` | Add `SLACK_WEBHOOK_URL` and Gmail secrets to env |
 
@@ -555,12 +553,12 @@ flowchart LR
 
 | # | Risk | Mitigation |
 |---|------|-----------|
-| R-1 | Reed / JobServe change email HTML structure | Parser is isolated per provider. Only one parser breaks at a time. Add a `Warnings` entry to `SourceFetchResult` when parse yields 0 jobs from a non-empty body. |
-| R-2 | Gmail refresh token revoked (user revokes access or token expires after 6 months of inactivity) | `GoogleCredentialProvider` catches auth errors and returns them as a `SourceFetchResult` with an empty job list and a descriptive warning. Does not throw. |
+| R-1 | Gmail / Indeed alert email HTML structure changes | Parser behavior is isolated per adapter. Only one source breaks at a time. Add a `Warnings` entry to `SourceFetchResult` when parse yields 0 jobs from a non-empty body. |
+| R-2 | Gmail service-account credentials revoked or invalid | `GoogleCredentialProvider` catches auth errors and returns them as a `SourceFetchResult` with an empty job list and a descriptive warning. Does not throw. |
 | R-3 | Slack rate limit (max 1 msg/sec per webhook) | Single POST per run. No pagination needed unless > 50 matches, which is unlikely given score threshold. |
 | R-4 | Gmail `users.messages.list` returns thousands of emails | Apply `maxResults=50` to the list call. The query `is:unread` and label scoping keeps the list small in practice. Mark as read after processing to prevent re-processing. |
 | R-5 | Cross-source duplicate jobs (API + email alert for same job) | `DeriveSourceJobId(url)` produces a stable hash from the canonical URL. The existing `Deduplicate()` in `JobSearchOrchestrator` handles the rest. |
-| R-6 | Google OAuth client credentials in CI | Store as GitHub Actions secrets. Never in code or `.env`. Document this in `CONTRIBUTING.md`. |
+| R-6 | Google service-account JSON in CI/Railway | Store as CI/Railway secrets. Never in code or committed `.env`. Document this in `CONTRIBUTING.md`. |
 
 ---
 

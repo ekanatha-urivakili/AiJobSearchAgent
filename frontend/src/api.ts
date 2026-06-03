@@ -1,4 +1,4 @@
-import type { EmploymentType, JobDetail, JobResult, SourceStatus, WorkMode } from "./types";
+import type { CvFile, EmploymentType, JobDetail, JobResult, SourceStatus, WorkMode } from "./types";
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:5001";
 
@@ -117,4 +117,31 @@ export async function saveConfig(config: Record<string, string>): Promise<void> 
     body: JSON.stringify(config),
   });
   if (!res.ok) throw new Error("Failed to save config");
+}
+
+export type CvUploadMode = "replace" | "rename";
+
+export async function fetchCvs(): Promise<CvFile[]> {
+  const res = await fetch(`${BASE_URL}/api/cvs`);
+  if (!res.ok) throw new Error("Failed to fetch CV files");
+  return res.json();
+}
+
+export async function uploadCv(file: File, mode: CvUploadMode, targetName: string): Promise<CvFile> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("mode", mode);
+  form.append("targetName", targetName);
+
+  const res = await fetch(`${BASE_URL}/api/cvs/upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const body: { message?: string } = await res.json().catch(() => ({}));
+    throw new Error(body.message ?? "Failed to upload CV");
+  }
+
+  return res.json();
 }

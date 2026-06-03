@@ -215,43 +215,6 @@ public static class SampleSources
                 null,
                 today.AddDays(-1),
                 "Build ASP.NET Core Web API services with React, TypeScript, SQL Server, AWS, Docker, CI/CD, payments and marketplace integrations.")
-        ]),
-        new SampleJobSourceAdapter("JobServe",
-        [
-            new(
-                "JobServe",
-                "jobserve-001",
-                new Uri("https://www.jobserve.com/gb/en/example-lead-developer"),
-                "Lead Developer .NET AWS",
-                "Example Commerce Group",
-                "London",
-                47,
-                EmploymentType.Contract,
-                WorkMode.Hybrid,
-                null,
-                null,
-                500,
-                575,
-                6,
-                today.AddDays(-2),
-                "Lead a senior engineering team delivering C#, ASP.NET Core, REST APIs, AWS, PostgreSQL, React, Agile delivery, code review and e-commerce integrations."),
-            new(
-                "JobServe",
-                "jobserve-002",
-                new Uri("https://www.jobserve.com/gb/en/example-low-rate"),
-                "Senior Software Developer",
-                "Example Agency",
-                "Oxford",
-                42,
-                EmploymentType.Contract,
-                WorkMode.Office,
-                null,
-                null,
-                350,
-                375,
-                6,
-                today.AddDays(-1),
-                "C# developer role with SQL and Web API.")
         ])
     ];
 }

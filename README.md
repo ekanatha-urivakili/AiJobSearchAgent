@@ -14,8 +14,10 @@ Automated job search agent for senior UK software roles matched against Ekanatha
 - Slack reporter — posts strong matches (score ≥ 85) via incoming webhook
 - Dual-mode MCP server — STDIO for AI clients, HTTP for the React dashboard
 - React/Vite dashboard — filter, sort, paginate, and open job adverts
-- Settings panel — configure Slack webhook and Gmail credentials from the UI, saved to `.env`
-- PostgreSQL schema, Docker Compose, Railway deployment
+- Settings panel — configure search criteria, Reed, Slack, Gmail, and Indeed settings
+- Secure settings store — PostgreSQL `app_settings` table with AES-GCM encryption for secrets
+- CV upload — saves `.pdf`, `.docx`, and `.md` files to `CVs/` with replace-or-rename flow
+- PostgreSQL schema, Docker Compose, Dockerfile, and Railway worker deployment
 
 ## Architecture
 
@@ -31,6 +33,8 @@ flowchart TD
         StdioMcp["STDIO MCP Server\n(default mode)"]
         McpService["JobSearchMcpService"]
         ConfigApi["Config API\nGET/POST /api/config"]
+        CvsApi["CV API\nGET /api/cvs\nPOST /api/cvs/upload"]
+        SettingsRepo["SettingsRepository\nPostgreSQL + AES-GCM"]
         CredProvider["CredentialProvider\n(env vars + .env file)"]
     end
 
@@ -60,11 +64,14 @@ flowchart TD
     WebUI --> HttpApi
     McpClient --> StdioMcp
     WebUI --> ConfigApi
+    WebUI --> CvsApi
     HttpApi --> McpService
     StdioMcp --> McpService
     McpService --> Orchestrator
     Scheduler --> Orchestrator
     ConfigApi --> CredProvider
+    ConfigApi --> SettingsRepo
+    CvsApi --> CvFolder[("CVs/")]
 
     Orchestrator --> PolicyGuard
     Orchestrator --> ReedAdapter
@@ -81,6 +88,7 @@ flowchart TD
     ReedAdapter --> ReedAPI[("Reed API")]
     SlackReporter --> Slack[("Slack Webhook")]
     MdReporter --> Reports[("reports/")]
+    SettingsRepo --> Postgres[("PostgreSQL")]
 ```
 
 ## Deployment
@@ -93,25 +101,33 @@ flowchart TB
         DevWorker["dotnet run Worker\n(one-shot or --schedule)"]
         LocalPg["Docker PostgreSQL\n(docker compose up postgres)"]
         DotEnv[".env file\n(credentials + config)"]
+        LocalCvs["CVs/\nlocal uploads"]
 
         DevUI -- "GET /api/jobs/search" --> DevMcp
         DevUI -- "GET/POST /api/config" --> DevMcp
+        DevUI -- "GET/POST /api/cvs" --> DevMcp
         DevMcp --> LocalPg
         DevWorker --> LocalPg
         DevMcp --> DotEnv
         DevWorker --> DotEnv
+        DevMcp --> LocalCvs
     end
 
     subgraph Railway["Railway Production"]
-        RailwayMcp["McpServer --http\n(PORT env var)"]
-        RailwayWorker["Worker --schedule"]
+        RailwayWorker["Worker --schedule\n(Dockerfile + railway.toml)"]
         RailwayPg["Managed PostgreSQL"]
         RailwaySecrets["Railway Env Vars\n(secrets)"]
 
-        RailwayMcp --> RailwayPg
         RailwayWorker --> RailwayPg
-        RailwayMcp --> RailwaySecrets
         RailwayWorker --> RailwaySecrets
+    end
+
+    subgraph OptionalRailwayWeb["Optional Railway Web UI"]
+        RailwayMcp["McpServer --http"]
+        RailwayFrontend["Frontend static/web service"]
+        RailwayFrontend --> RailwayMcp
+        RailwayMcp --> RailwayPg
+        RailwayMcp --> RailwaySecrets
     end
 ```
 
@@ -148,12 +164,14 @@ sequenceDiagram
     autonumber
     participant Client as Web UI / MCP Client
     participant Server as McpServer
+    participant Settings as SettingsRepository
     participant Orchestrator
     participant Reed as Reed API
     participant Gmail as Gmail API
     participant Scorer as Filter + Scorer
 
     Client->>Server: Search (HTTP GET /api/jobs/search or MCP tool)
+    Server->>Settings: Load saved config (HTTP mode)
     Server->>Orchestrator: RunAsync(criteria, profile)
 
     Orchestrator->>Reed: FetchAsync
@@ -180,14 +198,41 @@ sequenceDiagram
 | Min permanent salary | £75,000/yr | `JOB_SEARCH_MIN_PERMANENT_SALARY_GBP` |
 | Min contract day rate | £400/day | `JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP` |
 | Min contract duration | 6 months | `JOB_SEARCH_MIN_CONTRACT_MONTHS` |
-| Run time | 10:00 Europe/London | `JOB_SEARCH_RUN_AT` |
+| Time zone | `Europe/London` | `JOB_SEARCH_TIME_ZONE` |
+| Run time | `10:00` | `JOB_SEARCH_RUN_AT` |
 | Indeed alert query | `from:jobalerts-noreply@indeed.com is:unread` | `INDEED_GMAIL_SEARCH_QUERY` |
 
 Target titles: Senior Software Engineer, Senior Fullstack Engineer, Senior Software Developer, Lead Developer, Lead Software Engineer, Principal Engineer, Principal Developer.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in the secrets. The HTTP server reads this file at startup via `CredentialProvider`. All values can also be set as real environment variables (those take priority over the file).
+Copy `.env.example` to `.env` and fill in the secrets. The HTTP server reads this file at startup via `CredentialProvider`. All values can also be set as real environment variables; real environment variables take priority over `.env`.
+
+The Settings screen can persist configurable values to PostgreSQL through `POST /api/config`. Secret settings are encrypted in the `app_settings` table with AES-256-GCM and require `SETTINGS_ENCRYPTION_KEY`.
+
+Generate a local encryption key with:
+
+```bash
+openssl rand -base64 32
+```
+
+Set it in `.env` or Railway variables:
+
+```text
+SETTINGS_ENCRYPTION_KEY=<generated-value>
+```
+
+Keep this value stable. Changing it prevents decrypting previously saved secrets.
+
+### Reed API Key
+
+Reed jobs use the approved Reed API. Set:
+
+```text
+REED_API_KEY=<redacted>
+```
+
+If the key is absent, Reed is shown as not ready/skipped and the rest of the run continues.
 
 ### Slack Webhook URL
 
@@ -263,7 +308,27 @@ The adapter extracts the stable Indeed job key (`jk` parameter) from each alert 
 
 ### Settings Panel
 
-The React dashboard includes a **Settings** screen (top-right button) where you can enter and save these three values without touching the `.env` file manually. Changes are written to the `.env` file in the server's working directory via `POST /api/config`.
+The React dashboard includes a **Settings** screen where you can configure:
+
+- Search schedule, postcode, radius, posting age, salary floor, day-rate floor, and minimum contract months.
+- `REED_API_KEY`.
+- Slack webhook URL.
+- Gmail service-account JSON and Gmail search query.
+- Indeed Gmail alert query.
+
+`GET /api/config` returns saved values plus defaults, but secret values are masked in API responses. Blank secret fields preserve existing saved secrets.
+
+### CV Uploads
+
+The Settings screen also supports CV uploads. Files are saved under `CVs/` and git ignores uploaded CV documents by default.
+
+Allowed extensions:
+
+- `.pdf`
+- `.docx`
+- `.md`
+
+When a CV already exists, the UI asks whether to replace an existing file or add the upload with a new filename. The backend also validates extensions and sanitizes filenames in `POST /api/cvs/upload`.
 
 ## Run Locally
 
@@ -287,7 +352,7 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL (default `http://localhost:5173`). Use the Settings button to configure Slack and Gmail credentials.
+Open the Vite URL (default `http://localhost:5173`; Vite may fall back to `5174`). Use Settings to configure search criteria, integrations, and CV uploads.
 
 ### 4. Run the worker once
 
@@ -335,8 +400,39 @@ docker compose up -d postgres
 docker compose --profile worker up --build
 ```
 
+## Docker Build
+
+Railway uses the repository `Dockerfile`, which builds the scheduled worker image:
+
+```bash
+docker build -t ai-job-search-agent .
+docker run --rm ai-job-search-agent
+```
+
 ## Railway
 
-Deployment uses `railway.toml` and the project `Dockerfile`. Set `REED_API_KEY`, `SLACK_WEBHOOK_URL`, `GMAIL_CREDENTIALS_JSON`, `GMAIL_SEARCH_QUERY`, and `DATABASE_URL` as Railway environment variables.
+Deployment uses `railway.toml` and the project `Dockerfile`. The default Railway deployment is the scheduled worker, not the local React dashboard.
+
+Set these Railway variables on the worker service:
+
+```text
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+SETTINGS_ENCRYPTION_KEY=<generated-value>
+JOB_SEARCH_TIME_ZONE=Europe/London
+JOB_SEARCH_RUN_AT=10:00
+JOB_SEARCH_POSTCODE=MK4 4QG
+JOB_SEARCH_RADIUS_MILES=50
+JOB_SEARCH_POSTED_WITHIN_DAYS=7
+JOB_SEARCH_MIN_PERMANENT_SALARY_GBP=75000
+JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP=400
+JOB_SEARCH_MIN_CONTRACT_MONTHS=6
+REED_API_KEY=<redacted>
+SLACK_WEBHOOK_URL=<redacted>
+GMAIL_CREDENTIALS_JSON=<redacted>
+GMAIL_SEARCH_QUERY=label:job-alerts is:unread
+INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
+```
+
+The HTTP settings API and React dashboard are local developer tooling unless you add separate Railway web services for `AiJobSearchAgent.McpServer` and the frontend.
 
 See `docs/railway-deployment.md`.

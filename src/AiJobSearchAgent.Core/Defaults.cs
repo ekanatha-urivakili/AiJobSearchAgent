@@ -82,9 +82,8 @@ public static class Defaults
 
     public static IReadOnlyCollection<SourcePolicy> CreateSourcePolicies() =>
     [
+        new("Reed", FetchMode.ApprovedApi, Enabled: true, TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 3)),
         new("Indeed UK", FetchMode.AlertInbox, Enabled: false, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
-        new("Reed", FetchMode.AlertInbox, Enabled: true, TimeSpan.FromSeconds(3), new DateOnly(2026, 5, 30)),
-        new("JobServe", FetchMode.AlertInbox, Enabled: true, TimeSpan.FromSeconds(3), new DateOnly(2026, 5, 30)),
         new("Gmail Alerts", FetchMode.AlertInbox, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 2))
     ];
 }

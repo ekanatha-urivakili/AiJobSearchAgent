@@ -940,7 +940,7 @@ body {
   text-transform: uppercase;
 }
 
-.form-field input, .form-field textarea {
+.form-field input, .form-field textarea, .settings-select {
   background: #fbfdff;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -953,11 +953,74 @@ body {
   transition: border-color .15s;
 }
 
-.form-field input:focus, .form-field textarea:focus { border-color: var(--blue); }
+.form-field input:focus, .form-field textarea:focus, .settings-select:focus { border-color: var(--blue); }
 
 .secret-status {
   color: var(--green);
   font-size: .78rem;
+}
+
+.cv-file-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cv-empty {
+  color: var(--text-muted);
+  font-size: .88rem;
+  padding: 14px 16px;
+}
+
+.cv-file-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.cv-file-row:last-child {
+  border-bottom: none;
+}
+
+.cv-file-row span {
+  color: var(--text);
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cv-file-row small {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.cv-upload-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.cv-option {
+  align-items: center;
+  background: var(--navy-light);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: .88rem;
+  font-weight: 700;
+  gap: 8px;
+  padding: 8px 14px;
+}
+
+.cv-option input {
+  accent-color: var(--blue);
 }
 
 .settings-actions {
@@ -978,6 +1041,10 @@ body {
   font-weight: 600;
   padding: 10px 24px;
   transition: opacity .15s;
+}
+
+.save-btn.compact {
+  align-self: flex-start;
 }
 
 .save-btn:hover { opacity: .88; }

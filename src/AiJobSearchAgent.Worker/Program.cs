@@ -87,9 +87,7 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     {
         new("Reed",         FetchMode.ApprovedApi, !string.IsNullOrWhiteSpace(reedKey),    TimeSpan.FromSeconds(3),  new DateOnly(2026, 6, 3)),
         new("Gmail Alerts", FetchMode.AlertInbox,  !string.IsNullOrWhiteSpace(gmailCreds), TimeSpan.FromSeconds(0),  new DateOnly(2026, 6, 3)),
-        new("Indeed UK",    FetchMode.AlertInbox,  !string.IsNullOrWhiteSpace(gmailCreds), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
-        // Sample fallback sources — always enabled as a catch-all (ignored unless sources list contains them)
-        new("JobServe",     FetchMode.AlertInbox,  true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 3)),
+        new("Indeed UK",    FetchMode.AlertInbox,  !string.IsNullOrWhiteSpace(gmailCreds), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3))
     };
 
     // ── run ───────────────────────────────────────────────────────────────────

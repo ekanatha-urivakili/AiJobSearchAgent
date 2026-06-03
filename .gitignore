@@ -9,6 +9,8 @@
 *.userosscache
 *.sln.docstates
 reports/
+CVs/*
+!CVs/.gitkeep
 
 # Environment
 .env

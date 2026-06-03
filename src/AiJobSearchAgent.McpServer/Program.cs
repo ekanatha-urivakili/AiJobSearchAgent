@@ -41,7 +41,7 @@ static async Task RunHttpAsync(string[] args)
 
     RegisterShared(builder.Services);
 
-    var allowedOrigins = (Environment.GetEnvironmentVariable("ALLOWED_ORIGINS") ?? "http://localhost:5173")
+    var allowedOrigins = (Environment.GetEnvironmentVariable("ALLOWED_ORIGINS") ?? "http://localhost:5173,http://localhost:5174")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     builder.Services.AddCors(options =>
@@ -123,6 +123,64 @@ static async Task RunHttpAsync(string[] args)
     app.MapGet("/api/config/meta", () =>
         Results.Ok(new { secretKeys = SettingsRepository.SecretKeys, dbAvailable = app.Services.GetRequiredService<SettingsRepository>().IsAvailable }));
 
+    app.MapGet("/api/cvs", () =>
+    {
+        var cvDirectory = EnsureCvDirectory();
+        var files = Directory.EnumerateFiles(cvDirectory)
+            .Where(IsAllowedCvFile)
+            .Select(path => new CvFileDto(
+                Path.GetFileName(path),
+                new FileInfo(path).Length,
+                File.GetLastWriteTimeUtc(path)))
+            .OrderByDescending(file => file.UpdatedAtUtc)
+            .ToArray();
+
+        return Results.Ok(files);
+    });
+
+    app.MapPost("/api/cvs/upload", async (HttpRequest request, CancellationToken ct) =>
+    {
+        if (!request.HasFormContentType)
+            return Results.BadRequest(new { message = "Upload must use multipart/form-data." });
+
+        var form = await request.ReadFormAsync(ct);
+        var file = form.Files["file"];
+        if (file is null || file.Length == 0)
+            return Results.BadRequest(new { message = "Select a CV file to upload." });
+
+        var originalName = SanitiseCvFileName(file.FileName);
+        if (!IsAllowedCvName(originalName))
+            return Results.BadRequest(new { message = "Only .pdf, .docx, and .md files are allowed." });
+
+        var mode = form["mode"].ToString();
+        var requestedName = form["targetName"].ToString();
+        var targetName = string.IsNullOrWhiteSpace(requestedName)
+            ? originalName
+            : SanitiseCvFileName(requestedName);
+
+        if (!IsAllowedCvName(targetName))
+            return Results.BadRequest(new { message = "New CV name must end with .pdf, .docx, or .md." });
+
+        var cvDirectory = EnsureCvDirectory();
+        var targetPath = Path.Combine(cvDirectory, targetName);
+        if (File.Exists(targetPath) && !mode.Equals("replace", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Conflict(new
+            {
+                message = "A CV with this name already exists.",
+                existingName = targetName
+            });
+        }
+
+        await using (var stream = File.Create(targetPath))
+        {
+            await file.CopyToAsync(stream, ct);
+        }
+
+        var info = new FileInfo(targetPath);
+        return Results.Ok(new CvFileDto(info.Name, info.Length, info.LastWriteTimeUtc));
+    });
+
     await app.RunAsync();
 }
 
@@ -171,6 +229,46 @@ static string? FindEnvPath()
     return null;
 }
 
+static string EnsureCvDirectory()
+{
+    var repoRoot = FindRepoRoot() ?? Directory.GetCurrentDirectory();
+    var cvDirectory = Path.Combine(repoRoot, "CVs");
+    Directory.CreateDirectory(cvDirectory);
+    return cvDirectory;
+}
+
+static string? FindRepoRoot()
+{
+    var dir = AppContext.BaseDirectory;
+    for (var i = 0; i < 8; i++)
+    {
+        if (File.Exists(Path.Combine(dir, "AiJobSearchAgent.slnx"))) return dir;
+        var parent = Directory.GetParent(dir);
+        if (parent is null) break;
+        dir = parent.FullName;
+    }
+    return null;
+}
+
+static string SanitiseCvFileName(string fileName)
+{
+    var name = Path.GetFileName(fileName).Trim();
+    foreach (var invalid in Path.GetInvalidFileNameChars())
+        name = name.Replace(invalid, '-');
+    return name;
+}
+
+static bool IsAllowedCvFile(string path) =>
+    IsAllowedCvName(Path.GetFileName(path));
+
+static bool IsAllowedCvName(string name)
+{
+    var extension = Path.GetExtension(name);
+    return extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals(".docx", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals(".md", StringComparison.OrdinalIgnoreCase);
+}
+
 static void RegisterShared(IServiceCollection services)
 {
     services.AddSingleton(TimeProvider.System);
@@ -184,3 +282,5 @@ static void RegisterShared(IServiceCollection services)
         return new SettingsRepository(connectionString, encryptionKey);
     });
 }
+
+public sealed record CvFileDto(string Name, long SizeBytes, DateTime UpdatedAtUtc);

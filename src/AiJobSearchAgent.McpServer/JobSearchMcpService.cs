@@ -156,9 +156,8 @@ public sealed class JobSearchMcpService
     private IReadOnlyCollection<SourcePolicy> CreatePolicies() =>
     [
         new("Reed", FetchMode.ApprovedApi, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY")), TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
-        new("JobServe", FetchMode.AlertInbox, Enabled: false, TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
-        new("Indeed UK", FetchMode.AlertInbox, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON")), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
-        new("Cord", FetchMode.Disabled, Enabled: false, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 1))
+        new("Gmail Alerts", FetchMode.AlertInbox, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON")), TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 3)),
+        new("Indeed UK", FetchMode.AlertInbox, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON")), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3))
     ];
 
     private IEnumerable<IJobSourceAdapter> CreateAdapters(JobSearchCriteria criteria, IReadOnlySet<string> selectedSources)
@@ -171,9 +170,13 @@ public sealed class JobSearchMcpService
                 : new ReedApiJobSourceAdapter(httpClientFactory.CreateClient("Reed"), apiKey);
         }
 
-        if (selectedSources.Contains("JobServe"))
+        if (selectedSources.Contains("Gmail Alerts"))
         {
-            yield return new PolicyBlockedSourceAdapter("JobServe", "Alert inbox import is not implemented yet.");
+            var credJson = credentials.GetSecret("GMAIL_CREDENTIALS_JSON");
+            var gmailQuery = credentials.GetSecret("GMAIL_SEARCH_QUERY") ?? "label:job-alerts is:unread";
+            yield return string.IsNullOrWhiteSpace(credJson)
+                ? new PolicyBlockedSourceAdapter("Gmail Alerts", "GMAIL_CREDENTIALS_JSON is not configured.")
+                : new GmailAlertJobSourceAdapter(credJson, gmailQuery);
         }
 
         if (selectedSources.Contains("Indeed UK") || selectedSources.Contains("Indeed"))
@@ -184,11 +187,6 @@ public sealed class JobSearchMcpService
             yield return string.IsNullOrWhiteSpace(credJson)
                 ? new PolicyBlockedSourceAdapter("Indeed UK", "GMAIL_CREDENTIALS_JSON is not configured.")
                 : new IndeedAlertJobSourceAdapter(credJson, indeedQuery);
-        }
-
-        if (selectedSources.Contains("Cord"))
-        {
-            yield return new PolicyBlockedSourceAdapter("Cord", "Source disabled until manual export, notification, or approved API access is configured.");
         }
     }
 

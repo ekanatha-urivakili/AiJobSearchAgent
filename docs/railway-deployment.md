@@ -9,6 +9,8 @@ Create two Railway services:
 
 The worker uses the project `Dockerfile`. PostgreSQL should use Railway's managed PostgreSQL plugin.
 
+The default Railway deployment runs the scheduled worker. The local React dashboard, HTTP settings API, and CV upload screen require separate web services if you want them hosted on Railway.
+
 ## Environment Variables
 
 Set these on the worker service:
@@ -25,7 +27,19 @@ JOB_SEARCH_MIN_PERMANENT_SALARY_GBP=75000
 JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP=400
 JOB_SEARCH_MIN_CONTRACT_MONTHS=6
 REED_API_KEY=<redacted>
+SLACK_WEBHOOK_URL=<redacted>
+GMAIL_CREDENTIALS_JSON=<redacted>
+GMAIL_SEARCH_QUERY=label:job-alerts is:unread
+INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 ```
+
+Generate `SETTINGS_ENCRYPTION_KEY` with:
+
+```bash
+openssl rand -base64 32
+```
+
+Keep the value stable. Changing it prevents decrypting any previously saved secret values in `app_settings`.
 
 ## Database Schema
 
@@ -41,6 +55,20 @@ For local Docker, the schema is applied automatically by the PostgreSQL containe
 4. Add the environment variables above to the worker service.
 5. Deploy the worker service.
 6. Confirm logs show the next scheduled run at 10:00 Europe/London.
+
+## Pre-Deploy Checks
+
+Run these locally before pushing:
+
+```bash
+dotnet build
+npm --prefix frontend run build
+dotnet run --project tests/AiJobSearchAgent.Tests/AiJobSearchAgent.Tests.csproj
+docker build -t ai-job-search-agent-railway-check .
+docker run --rm ai-job-search-agent-railway-check
+```
+
+The container smoke test exits after one run unless Railway starts it with `--schedule` from `railway.toml`.
 
 ## Local Docker Flow
 
@@ -71,7 +99,9 @@ docker compose up -d postgres
 psql "postgres://ai_job_search_agent:change-me-local-only@localhost:5432/ai_job_search_agent" -c "\dt"
 ```
 
-The scheduled worker is the service deployed by the project `Dockerfile`. The HTTP settings API and React dashboard are local developer tooling unless you add a separate Railway web service for `AiJobSearchAgent.McpServer` and the frontend.
+The scheduled worker is the service deployed by the project `Dockerfile`. The HTTP settings API, CV upload API, and React dashboard are local developer tooling unless you add a separate Railway web service for `AiJobSearchAgent.McpServer` and a frontend service.
+
+If you deploy the HTTP API to Railway, persist uploaded CVs with a Railway volume mounted to the app's `CVs/` path. Without a volume, uploaded CV files are container-local and may be lost on redeploy.
 
 ## Post-Deployment Evidence To Share
 

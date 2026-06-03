@@ -172,11 +172,11 @@ static void DifferentSourcesSameIdNotMerged()
     var reedJob = new JobPosting("Reed", "job-001", new Uri("https://example.com"), "Senior Engineer", "Acme", "London",
         10, EmploymentType.Permanent, WorkMode.Hybrid, 85000, 95000, null, null, null,
         new DateOnly(2026, 5, 30), "C# AWS");
-    var jobserveJob = new JobPosting("JobServe", "job-001", new Uri("https://example.com"), "Senior Engineer", "Acme", "London",
+    var gmailJob = new JobPosting("Gmail Alerts", "job-001", new Uri("https://example.com"), "Senior Engineer", "Acme", "London",
         10, EmploymentType.Permanent, WorkMode.Hybrid, 85000, 95000, null, null, null,
         new DateOnly(2026, 5, 30), "C# AWS");
 
-    var deduped = new[] { reedJob, jobserveJob }
+    var deduped = new[] { reedJob, gmailJob }
         .GroupBy(j => $"{j.Source}|{j.SourceJobId}".ToLowerInvariant())
         .Select(g => g.OrderByDescending(j => j.PostedDate).First())
         .ToArray();

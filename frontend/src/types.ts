@@ -35,3 +35,9 @@ export interface SourceStatus {
   mode: string;
   warnings: string[];
 }
+
+export interface CvFile {
+  name: string;
+  sizeBytes: number;
+  updatedAtUtc: string;
+}

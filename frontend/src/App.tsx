@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { fetchJobDetail, fetchMatches, getConfig, saveConfig } from "./api";
-import type { JobDetail, JobResult, SourceStatus } from "./types";
+import { fetchCvs, fetchJobDetail, fetchMatches, getConfig, saveConfig, uploadCv } from "./api";
+import type { CvFile, JobDetail, JobResult, SourceStatus } from "./types";
 import type { ReactElement } from "react";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -255,6 +255,31 @@ const SEARCH_SETTINGS: ConfigField[] = [
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unexpected error";
+}
+
+function isAllowedCvFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".md");
+}
+
+function uniqueCvName(fileName: string, existing: CvFile[]): string {
+  const dot = fileName.lastIndexOf(".");
+  const base = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const ext = dot > 0 ? fileName.slice(dot) : "";
+  const names = new Set(existing.map(file => file.name.toLowerCase()));
+  let candidate = fileName;
+  let index = 2;
+  while (names.has(candidate.toLowerCase())) {
+    candidate = `${base}-${index}${ext}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function BrowsePage(): ReactElement {
@@ -569,13 +594,21 @@ function SettingsPage(): ReactElement {
   const navigate = useNavigate();
   const [config, setConfig]   = useState<Record<string, string>>({});
   const [configuredSecrets, setConfiguredSecrets] = useState<Set<string>>(new Set());
+  const [cvFiles, setCvFiles] = useState<CvFile[]>([]);
+  const [cvFile, setCvFile] = useState<File | null>(null);
+  const [cvMode, setCvMode] = useState<"replace" | "rename">("rename");
+  const [replaceName, setReplaceName] = useState("");
+  const [newCvName, setNewCvName] = useState("");
+  const [uploadingCv, setUploadingCv] = useState(false);
   const [saving, setSaving]   = useState(false);
   const [toast, setToast]     = useState<{ msg: string; ok: boolean } | null>(null);
 
   useEffect(() => {
-    getConfig()
-      .then(values => {
+    Promise.all([getConfig(), fetchCvs()])
+      .then(([values, cvs]) => {
         setConfig(values);
+        setCvFiles(cvs);
+        setReplaceName(cvs[0]?.name ?? "");
         const configured = (values["__configuredSecretKeys"] ?? "")
           .split(",")
           .map(value => value.trim())
@@ -599,6 +632,56 @@ function SettingsPage(): ReactElement {
       setToast({ msg: errorMessage(error), ok: false });
     }
     setSaving(false);
+  }
+
+  async function reloadCvs() {
+    const cvs = await fetchCvs();
+    setCvFiles(cvs);
+    setReplaceName(cvs[0]?.name ?? "");
+  }
+
+  function handleCvFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    if (file && !isAllowedCvFile(file)) {
+      e.target.value = "";
+      setCvFile(null);
+      setToast({ msg: "Only .pdf, .docx, and .md files are allowed.", ok: false });
+      return;
+    }
+
+    setCvFile(file);
+    setToast(null);
+    if (file) {
+      const sameName = cvFiles.find(cv => cv.name.toLowerCase() === file.name.toLowerCase());
+      setCvMode(cvFiles.length > 0 ? "replace" : "rename");
+      setReplaceName(sameName?.name ?? cvFiles[0]?.name ?? "");
+      setNewCvName(uniqueCvName(file.name, cvFiles));
+    }
+  }
+
+  async function handleCvUpload() {
+    if (!cvFile) {
+      setToast({ msg: "Select a CV file first.", ok: false });
+      return;
+    }
+
+    const targetName = cvFiles.length > 0 && cvMode === "replace" ? replaceName : newCvName;
+    if (!targetName.trim()) {
+      setToast({ msg: "Enter a CV file name.", ok: false });
+      return;
+    }
+
+    setUploadingCv(true);
+    try {
+      await uploadCv(cvFile, cvFiles.length > 0 ? cvMode : "rename", targetName.trim());
+      await reloadCvs();
+      setCvFile(null);
+      setNewCvName("");
+      setToast({ msg: "CV uploaded.", ok: true });
+    } catch (error) {
+      setToast({ msg: errorMessage(error), ok: false });
+    }
+    setUploadingCv(false);
   }
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -648,6 +731,69 @@ function SettingsPage(): ReactElement {
                 />
                 {configuredSecrets.has("REED_API_KEY") && <span className="secret-status">Current key is stored encrypted in the database.</span>}
               </div>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-section-title">CV Upload</div>
+            <div className="settings-body">
+              <div className="cv-file-list">
+                {cvFiles.length === 0 && <span className="cv-empty">No CVs saved yet.</span>}
+                {cvFiles.map(file => (
+                  <div className="cv-file-row" key={file.name}>
+                    <span>{file.name}</span>
+                    <small>{formatBytes(file.sizeBytes)} · {fmtDate(file.updatedAtUtc.slice(0, 10))}</small>
+                  </div>
+                ))}
+              </div>
+
+              <div className="form-field">
+                <label>Upload CV</label>
+                <input accept=".pdf,.docx,.md" type="file" onChange={handleCvFileChange} />
+              </div>
+
+              {cvFile && cvFiles.length > 0 && (
+                <div className="cv-upload-options">
+                  <label className="cv-option">
+                    <input
+                      checked={cvMode === "replace"}
+                      name="cv-upload-mode"
+                      onChange={() => setCvMode("replace")}
+                      type="radio"
+                    />
+                    Replace Existing
+                  </label>
+                  <label className="cv-option">
+                    <input
+                      checked={cvMode === "rename"}
+                      name="cv-upload-mode"
+                      onChange={() => setCvMode("rename")}
+                      type="radio"
+                    />
+                    Add With New Name
+                  </label>
+                </div>
+              )}
+
+              {cvFile && cvFiles.length > 0 && cvMode === "replace" && (
+                <div className="form-field">
+                  <label>Replace</label>
+                  <select className="settings-select" value={replaceName} onChange={e => setReplaceName(e.target.value)}>
+                    {cvFiles.map(file => <option key={file.name} value={file.name}>{file.name}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {cvFile && (cvFiles.length === 0 || cvMode === "rename") && (
+                <div className="form-field">
+                  <label>Save As</label>
+                  <input value={newCvName} onChange={e => setNewCvName(e.target.value)} />
+                </div>
+              )}
+
+              <button className="save-btn compact" disabled={!cvFile || uploadingCv} onClick={handleCvUpload} type="button">
+                {uploadingCv ? "Uploading…" : "Upload CV"}
+              </button>
             </div>
           </div>
 
