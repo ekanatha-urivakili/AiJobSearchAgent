@@ -255,3 +255,294 @@ public static class SampleSources
         ])
     ];
 }
+
+public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
+{
+    // Salary pattern: £80,000 - £90,000 a year | £450 - £550 a day | £80k
+    private static readonly System.Text.RegularExpressions.Regex SalaryRegex = new(
+        @"£([\d,]+)k?\s*(?:[-–]\s*£([\d,]+)k?)?\s*(a\s+year|per\s+annum|p\.?a\.?|/yr|a\s+day|per\s+day|/day)?",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // UK location signals
+    private static readonly System.Text.RegularExpressions.Regex LocationRegex = new(
+        @"(?:London|Manchester|Birmingham|Leeds|Edinburgh|Bristol|Sheffield|Cardiff|Liverpool|Nottingham|" +
+        @"Leicester|Milton Keynes|Oxford|Cambridge|Reading|Southampton|Brighton|Newcastle|Glasgow|" +
+        @"Coventry|Luton|Bedford|Northampton|Derby|Norwich|Portsmouth|York|Aberdeen|Dundee|" +
+        @"Remote|Hybrid|United Kingdom|England|UK)(?:[^<\n]{0,40})?",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private readonly string? credentialsJson;
+    private readonly string query;
+
+    public IndeedAlertJobSourceAdapter(string? credentialsJson, string? query = null)
+    {
+        this.credentialsJson = credentialsJson;
+        this.query = string.IsNullOrWhiteSpace(query)
+            ? "from:jobalerts-noreply@indeed.com is:unread"
+            : query;
+    }
+
+    public string SourceName => "Indeed UK";
+
+    public async Task<SourceFetchResult> FetchAsync(JobSearchCriteria criteria, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), ["Indeed alert credentials not configured."]);
+        }
+
+        try
+        {
+            var credential = GoogleCredential.FromJson(credentialsJson)
+                .CreateScoped(GmailService.Scope.GmailReadonly);
+
+            var service = new GmailService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "AiJobSearchAgent"
+            });
+
+            var listRequest = service.Users.Messages.List("me");
+            listRequest.Q = query;
+            var listResponse = await listRequest.ExecuteAsync(cancellationToken);
+
+            if (listResponse.Messages == null || listResponse.Messages.Count == 0)
+            {
+                return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), Array.Empty<string>());
+            }
+
+            var jobs = new List<JobPosting>();
+            var warnings = new List<string>();
+            var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var msgSummary in listResponse.Messages)
+            {
+                var message = await service.Users.Messages.Get("me", msgSummary.Id).ExecuteAsync(cancellationToken);
+                var body = GetMessageBody(message);
+                if (string.IsNullOrWhiteSpace(body)) continue;
+
+                var extracted = ParseAlertEmail(body, criteria);
+                foreach (var job in extracted)
+                {
+                    if (seenIds.Add(job.SourceJobId))
+                        jobs.Add(job);
+                }
+            }
+
+            return new SourceFetchResult(SourceName, jobs, warnings);
+        }
+        catch (Exception ex)
+        {
+            return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), [$"Indeed alert error: {ex.Message}"]);
+        }
+    }
+
+    // ── HTML parsing ─────────────────────────────────────────────────────────
+
+    public IReadOnlyCollection<JobPosting> ParseAlertEmail(string html, JobSearchCriteria criteria)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var jobs = new List<JobPosting>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var links = doc.DocumentNode.SelectNodes("//a[@href]");
+        if (links == null) return jobs;
+
+        foreach (var link in links)
+        {
+            var href = link.GetAttributeValue("href", "");
+
+            // Must be an Indeed URL with a job key
+            if (!href.Contains("indeed.com", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Uri.TryCreate(href, UriKind.Absolute, out _)) continue;
+
+            var jk = ExtractJobKey(href);
+            if (string.IsNullOrWhiteSpace(jk)) continue;
+            if (!seen.Add(jk)) continue;
+
+            var title = HtmlEntity.DeEntitize(link.InnerText).Trim();
+            // Filter out navigation/button links that don't look like job titles
+            if (title.Length < 8 || title.Contains("http", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var container = FindJobContainer(link);
+            var containerText = container != null
+                ? HtmlEntity.DeEntitize(container.InnerText)
+                : string.Empty;
+
+            var company = ExtractCompany(container, title);
+            var location = ExtractLocation(containerText);
+            var (salaryMin, salaryMax, isDayRate) = ExtractSalary(containerText);
+            var description = BuildDescription(containerText, title);
+            var employmentType = isDayRate ? EmploymentType.Contract : EmploymentType.Permanent;
+            var workMode = InferWorkMode($"{title} {location} {description}");
+            var months = employmentType == EmploymentType.Contract ? InferContractMonths(description) : (int?)null;
+
+            // Canonical URL uses the stable jk parameter
+            var canonicalUrl = new Uri($"https://uk.indeed.com/viewjob?jk={jk}");
+
+            jobs.Add(new JobPosting(
+                SourceName,
+                jk,
+                canonicalUrl,
+                title,
+                string.IsNullOrWhiteSpace(company) ? "Unknown" : company,
+                string.IsNullOrWhiteSpace(location) ? "Unknown" : location,
+                0, // Distance not available from email alert
+                employmentType,
+                workMode,
+                employmentType == EmploymentType.Permanent ? salaryMin : null,
+                employmentType == EmploymentType.Permanent ? salaryMax : null,
+                employmentType == EmploymentType.Contract ? salaryMin : null,
+                employmentType == EmploymentType.Contract ? salaryMax : null,
+                months,
+                DateOnly.FromDateTime(DateTime.Today),
+                description));
+        }
+
+        return jobs;
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>Extracts the stable Indeed job key (jk=...) from any Indeed URL variant.</summary>
+    public static string? ExtractJobKey(string url)
+    {
+        // Handle Indeed redirect URLs: /rc/clk?jk=XXX and canonical /viewjob?jk=XXX
+        var queryStart = url.IndexOf('?');
+        if (queryStart < 0) return null;
+
+        var query = url[(queryStart + 1)..];
+        foreach (var part in query.Split('&'))
+        {
+            var kv = part.Split('=', 2);
+            if (kv.Length == 2 && kv[0].Equals("jk", StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(kv[1]);
+        }
+
+        return null;
+    }
+
+    private static HtmlNode? FindJobContainer(HtmlNode link)
+    {
+        // Walk up the DOM to find a table cell, list item, or substantial div
+        var node = link.ParentNode;
+        for (var depth = 0; depth < 7 && node != null; depth++)
+        {
+            var tag = node.Name.ToLowerInvariant();
+            if (tag is "td" or "li" or "article") return node;
+            if (tag == "div" && (node.InnerText?.Length ?? 0) > 60) return node;
+            node = node.ParentNode;
+        }
+        return link.ParentNode;
+    }
+
+    private static string ExtractCompany(HtmlNode? container, string title)
+    {
+        if (container == null) return string.Empty;
+
+        foreach (var node in container.ChildNodes.Concat(
+            container.SelectNodes(".//span | .//div | .//p") ?? Enumerable.Empty<HtmlNode>()))
+        {
+            var text = HtmlEntity.DeEntitize(node.InnerText ?? "").Trim();
+            var firstLine = text.Split('\n', '\r')[0].Trim();
+
+            // Skip the title itself and empty/too-long/salary nodes
+            if (string.IsNullOrWhiteSpace(firstLine)) continue;
+            if (firstLine.Equals(title, StringComparison.OrdinalIgnoreCase)) continue;
+            if (firstLine.Length > 100 || firstLine.Length < 3) continue;
+            if (firstLine.Contains('£') || firstLine.Contains("http")) continue;
+            if (firstLine.StartsWith("View ", StringComparison.OrdinalIgnoreCase)) continue;
+
+            return firstLine;
+        }
+
+        return string.Empty;
+    }
+
+    private static string ExtractLocation(string text)
+    {
+        var match = LocationRegex.Match(text);
+        return match.Success ? match.Value.Trim().Split('\n')[0].Trim() : string.Empty;
+    }
+
+    public static (decimal? min, decimal? max, bool isDayRate) ExtractSalary(string text)
+    {
+        var match = SalaryRegex.Match(text);
+        if (!match.Success) return (null, null, false);
+
+        var rawMin = match.Groups[1].Value.Replace(",", "");
+        if (!decimal.TryParse(rawMin, out var min)) return (null, null, false);
+
+        decimal? max = null;
+        if (match.Groups[2].Success)
+        {
+            var rawMax = match.Groups[2].Value.Replace(",", "");
+            if (decimal.TryParse(rawMax, out var maxVal))
+                max = maxVal;
+        }
+
+        var period = match.Groups[3].Value.ToLowerInvariant();
+        var isDayRate = period.Contains("day");
+
+        return (min, max, isDayRate);
+    }
+
+    private static string BuildDescription(string containerText, string title)
+    {
+        if (string.IsNullOrWhiteSpace(containerText))
+            return "Sourced from Indeed job alert. Visit link for full details.";
+
+        var trimmed = containerText.Trim();
+        const int maxLen = 400;
+        return trimmed.Length > maxLen
+            ? trimmed[..maxLen].Trim() + "…"
+            : trimmed;
+    }
+
+    private static WorkMode InferWorkMode(string value)
+    {
+        var v = value.ToLowerInvariant();
+        if (v.Contains("remote")) return WorkMode.Remote;
+        return v.Contains("hybrid") ? WorkMode.Hybrid : WorkMode.Office;
+    }
+
+    private static int? InferContractMonths(string description)
+    {
+        var v = description.ToLowerInvariant();
+        for (var m = 3; m <= 24; m++)
+            if (v.Contains($"{m} month")) return m;
+        return null;
+    }
+
+    /// <summary>Test-only helper: parses an HTML string as if it were an Indeed alert email body.</summary>
+    public static IReadOnlyList<JobPosting> ParseFixture(string html, JobSearchCriteria criteria)
+    {
+        var adapter = new IndeedAlertJobSourceAdapter(null);
+        return adapter.ParseAlertEmail(html, criteria).ToList();
+    }
+
+    private static string GetMessageBody(Message message)
+    {
+        if (message.Payload?.Body?.Data != null)
+            return DecodeBase64(message.Payload.Body.Data);
+
+        if (message.Payload?.Parts != null)
+        {
+            foreach (var part in message.Payload.Parts)
+            {
+                if (part.MimeType == "text/html" && part.Body?.Data != null)
+                    return DecodeBase64(part.Body.Data);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string DecodeBase64(string base64)
+    {
+        var data = Convert.FromBase64String(base64.Replace('-', '+').Replace('_', '/'));
+        return System.Text.Encoding.UTF8.GetString(data);
+    }
+}

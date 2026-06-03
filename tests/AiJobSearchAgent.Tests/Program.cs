@@ -15,6 +15,10 @@ var tests = new (string Name, Action Test)[]
     ("CV scorer penalises jobs with few keyword matches", LowKeywordMatchIsNotRecommended),
     ("Slack reporter skips when URL is null", SlackReporterSkipsWhenUrlIsNull),
     ("Gmail adapter returns warning when credentials are null", GmailAdapterReturnsWarningWhenCredentialsAreNull),
+    ("Indeed adapter returns warning when credentials are null", IndeedAdapterReturnsWarningWhenCredentialsAreNull),
+    ("Indeed adapter extracts job key from rc/clk URL", IndeedAdapterExtractsJobKeyFromRedirectUrl),
+    ("Indeed adapter parses jobs from alert email HTML fixture", IndeedAdapterParsesJobsFromEmailFixture),
+    ("Indeed adapter parses day-rate salary as contract", IndeedAdapterParsesDayRateSalaryAsContract),
 };
 
 var failures = new List<string>();
@@ -232,6 +236,91 @@ static void GmailAdapterReturnsWarningWhenCredentialsAreNull()
     AssertEqual(0, result.Jobs.Count);
     AssertEqual(1, result.Warnings.Count);
     AssertTrue(result.Warnings.First().Contains("Gmail credentials not configured"));
+}
+
+// ── Indeed adapter tests ─────────────────────────────────────────────────────
+
+static void IndeedAdapterReturnsWarningWhenCredentialsAreNull()
+{
+    var adapter = new IndeedAlertJobSourceAdapter(null);
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 6, 3));
+    var result = adapter.FetchAsync(criteria, CancellationToken.None).Result;
+
+    AssertEqual(0, result.Jobs.Count);
+    AssertEqual(1, result.Warnings.Count);
+    AssertTrue(result.Warnings.First().Contains("Indeed alert credentials not configured"));
+}
+
+static void IndeedAdapterExtractsJobKeyFromRedirectUrl()
+{
+    // Indeed redirect URL — jk is embedded in query string
+    var rcClkUrl = "https://uk.indeed.com/rc/clk?jk=abc123xyz&atk=1mxyz&from=jobalert&alid=foo";
+    AssertEqual("abc123xyz", IndeedAlertJobSourceAdapter.ExtractJobKey(rcClkUrl)!);
+
+    // Canonical URL
+    var viewJobUrl = "https://uk.indeed.com/viewjob?jk=def456&tk=1nxyz";
+    AssertEqual("def456", IndeedAlertJobSourceAdapter.ExtractJobKey(viewJobUrl)!);
+
+    // No jk param
+    var noJk = "https://uk.indeed.com/jobs?q=engineer&l=london";
+    AssertTrue(IndeedAlertJobSourceAdapter.ExtractJobKey(noJk) is null);
+}
+
+static void IndeedAdapterParsesJobsFromEmailFixture()
+{
+    // Minimal Indeed-style alert email HTML fixture
+    const string html = """
+        <html><body>
+        <table>
+          <tr>
+            <td>
+              <a href="https://uk.indeed.com/rc/clk?jk=aabbcc112233&atk=1mx&from=jobalert">Senior Software Engineer</a>
+              <span>Acme Fintech Ltd</span>
+              <span>Milton Keynes, MK4</span>
+              <span>£85,000 - £95,000 a year</span>
+              <p>C# ASP.NET Core React AWS microservices payments hybrid agile role.</p>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="https://uk.indeed.com/rc/clk?jk=ddeeff445566&atk=2mx&from=jobalert">Lead Developer .NET</a>
+              <span>Commerce Group plc</span>
+              <span>London, EC1A</span>
+              <span>£500 - £600 a day</span>
+              <p>6 month contract. C# AWS Docker CI/CD e-commerce remote.</p>
+            </td>
+          </tr>
+        </table>
+        </body></html>
+        """;
+
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 6, 3));
+    var jobs = IndeedAlertJobSourceAdapter.ParseFixture(html, criteria);
+
+    AssertEqual(2, jobs.Count);
+
+    var senior = jobs.First(j => j.SourceJobId == "aabbcc112233");
+    AssertEqual("Senior Software Engineer", senior.Title);
+    AssertEqual("Indeed UK", senior.Source);
+    AssertTrue(senior.Url.ToString().Contains("aabbcc112233"));
+    AssertEqual(EmploymentType.Permanent, senior.EmploymentType);
+    AssertTrue(senior.SalaryMin >= 85000);
+
+    var lead = jobs.First(j => j.SourceJobId == "ddeeff445566");
+    AssertEqual(EmploymentType.Contract, lead.EmploymentType);
+    AssertTrue(lead.DayRateMin >= 500);
+}
+
+static void IndeedAdapterParsesDayRateSalaryAsContract()
+{
+    var (min, max, isDayRate) = IndeedAlertJobSourceAdapter.ExtractSalary("£450 - £550 a day");
+    AssertTrue(isDayRate);
+    AssertEqual(450m, min!.Value);
+    AssertEqual(550m, max!.Value);
+
+    var (min2, _, isDayRate2) = IndeedAlertJobSourceAdapter.ExtractSalary("£85,000 - £95,000 a year");
+    AssertTrue(!isDayRate2);
+    AssertEqual(85000m, min2!.Value);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

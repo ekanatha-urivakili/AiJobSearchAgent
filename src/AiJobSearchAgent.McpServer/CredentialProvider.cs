@@ -25,7 +25,11 @@ public sealed class CredentialProvider
                     var idx = trimmed.IndexOf('=');
                     if (idx <= 0) continue;
                     var key = trimmed[..idx].Trim();
-                    var value = trimmed[(idx + 1)..].Trim().Trim('"');
+                    var raw = trimmed[(idx + 1)..].Trim();
+                    // Strip a single wrapping quote pair — supports both "value" and 'value' (bash-sourced .env)
+                    var value = raw.Length >= 2 && ((raw[0] == '"' && raw[^1] == '"') || (raw[0] == '\'' && raw[^1] == '\''))
+                        ? raw[1..^1]
+                        : raw;
                     fileVars[key] = value;
                 }
             }

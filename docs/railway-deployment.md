@@ -15,6 +15,7 @@ Set these on the worker service:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
+SETTINGS_ENCRYPTION_KEY=<32-byte base64 key>
 JOB_SEARCH_TIME_ZONE=Europe/London
 JOB_SEARCH_RUN_AT=10:00
 JOB_SEARCH_POSTCODE=MK4 4QG
@@ -23,6 +24,7 @@ JOB_SEARCH_POSTED_WITHIN_DAYS=7
 JOB_SEARCH_MIN_PERMANENT_SALARY_GBP=75000
 JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP=400
 JOB_SEARCH_MIN_CONTRACT_MONTHS=6
+REED_API_KEY=<redacted>
 ```
 
 ## Database Schema
@@ -60,27 +62,16 @@ Run PostgreSQL and the worker container:
 docker compose --profile worker up --build
 ```
 
-## Current Checkout Blockers
+## Local Schema Check
 
-This checkout does not currently include the worker source project, solution file, tests, or Dockerfile referenced by `README.md` and `railway.toml`.
-
-Before Railway can deploy the worker, add or restore:
-
-```text
-Dockerfile
-AiJobSearchAgent.slnx
-src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj
-tests/AiJobSearchAgent.Tests/AiJobSearchAgent.Tests.csproj
-```
-
-You can still test PostgreSQL schema initialization locally with:
+You can test PostgreSQL schema initialization locally with:
 
 ```bash
 docker compose up -d postgres
 psql "postgres://ai_job_search_agent:change-me-local-only@localhost:5432/ai_job_search_agent" -c "\dt"
 ```
 
-You cannot test email ingestion or view crawled jobs from this checkout until the worker and alert inbox adapters exist.
+The scheduled worker is the service deployed by the project `Dockerfile`. The HTTP settings API and React dashboard are local developer tooling unless you add a separate Railway web service for `AiJobSearchAgent.McpServer` and the frontend.
 
 ## Post-Deployment Evidence To Share
 

@@ -37,7 +37,7 @@ The MCP server should not be a scraping bot. It should be a controlled integrati
 |---|---|---|---|---|
 | Reed | Official Reed Jobseeker API | Reed job alert email ingestion | Do not crawl `/api/` as a generic bot; use the API key flow. | Reed documents search and job details API endpoints and requires the API key in basic auth. Reed help also supports saved searches and daily or weekly email alerts. |
 | JobServe | Saved search alerts via email or RSS | Manual import of alert content | Do not automate logged-in browsing or mass page crawling. | JobServe documents saved searches plus daily, instant, email, RSS, and notification alerts. |
-| Indeed | Approved Indeed partner API only if access is granted | Indeed Job Alert email ingestion | Do not scrape Indeed search pages or automate access without permission. | Indeed docs expose partner APIs, with some content requiring sign-in. Job Sync is for ATS partners posting jobs, not general candidate job search. Indeed support documents job alerts for signed-in accounts. |
+| Indeed | Indeed Job Alert email ingestion (✅ implemented — AlertInbox via Gmail) | Approved Indeed partner API if access is granted | Do not scrape Indeed search pages or automate access without permission. | Indeed support documents job alerts for signed-in accounts. `IndeedAlertJobSourceAdapter` parses `from:jobalerts-noreply@indeed.com` emails via the Gmail service account. |
 | Cord | Manual export, approved partner access, or user-supplied email notifications only | Read-only import from user-provided messages | Do not automate Cord website access. | Cord terms restrict automated systems that send more requests than a human reasonably could in the same period. No public candidate job-search API was found. |
 
 ## 3. MCP Server HLD
@@ -164,31 +164,25 @@ Policy:
 
 ### 5.3 Indeed Adapter
 
-**Priority:** Phase 2 only after approved access is confirmed.
+**Priority:** Phase 2 — ✅ implemented 2026-06-03 via `AlertInbox` (Gmail alert email ingestion).
 
-Indeed should stay disabled unless there is approved API access or email alert ingestion owned by the candidate account.
+`IndeedAlertJobSourceAdapter` reads Indeed job alert emails from the Gmail inbox using the shared `GMAIL_CREDENTIALS_JSON` service account. The adapter:
+
+1. Queries Gmail with `INDEED_GMAIL_SEARCH_QUERY` (default: `from:jobalerts-noreply@indeed.com is:unread`).
+2. Parses each email's HTML body using HtmlAgilityPack.
+3. Extracts the stable Indeed job key (`jk` URL parameter) as `SourceJobId`.
+4. Derives a canonical URL `https://uk.indeed.com/viewjob?jk={jk}`.
+5. Infers title, company, location, salary, employment type, and work mode from surrounding email elements.
+6. Does not web-crawl Indeed — ingestion is purely from candidate-owned email alerts.
 
 Implementation notes:
 
-1. Keep `Indeed UK` disabled for direct web crawling.
-2. If partner API access is granted, wrap only the documented API scope in an adapter.
-3. If using Job Alerts, ingest emails from the candidate-owned mailbox and parse alert content.
-4. Do not use browser automation for search result crawling.
-5. Record the access basis in `source_policies.last_reviewed_on` and adapter configuration.
+- `IndeedAlertJobSourceAdapter` lives in `AiJobSearchAgent.Core/Sources.cs` alongside `GmailAlertJobSourceAdapter`.
+- `JobSearchMcpService.CreatePolicies()` enables Indeed UK automatically when `GMAIL_CREDENTIALS_JSON` is set.
+- `INDEED_GMAIL_SEARCH_QUERY` overrides the default Gmail filter.
+- `ParseFixture` static helper allows unit testing without Gmail credentials.
 
-Policy before approval:
-
-```json
-{
-  "sourceName": "Indeed UK",
-  "fetchMode": "Disabled",
-  "enabled": false,
-  "minimumDelaySeconds": 10,
-  "requiresSecret": null
-}
-```
-
-Policy after approved alert ingestion:
+Policy (live):
 
 ```json
 {
@@ -196,7 +190,8 @@ Policy after approved alert ingestion:
   "fetchMode": "AlertInbox",
   "enabled": true,
   "minimumDelaySeconds": 10,
-  "requiresSecret": "JOB_ALERT_INBOX_TOKEN"
+  "requiredSecret": "GMAIL_CREDENTIALS_JSON",
+  "lastReviewedOn": "2026-06-03"
 }
 ```
 
@@ -364,7 +359,7 @@ flowchart TD
 
 1. Add mailbox or `.eml` import abstraction.
 2. Implement JobServe alert parser.
-3. Implement Indeed alert parser with source policy set to `AlertInbox`.
+3. ✅ Implement Indeed alert parser with source policy set to `AlertInbox`. — done 2026-06-03
 4. Add alert fixture tests for each source template.
 5. Persist imported alert hashes to avoid duplicate reporting.
 
@@ -554,5 +549,7 @@ Small supplementary diagrams were added above in the Authorization and Deduplica
 ---
 
 ## 16. Change log
+- 2026-06-03: Phase 2 Indeed `AlertInbox` integration implemented. Added `IndeedAlertJobSourceAdapter`, updated `JobSearchMcpService` policies/adapters/health, added `INDEED_GMAIL_SEARCH_QUERY` env var, added unit tests, updated README and this document.
+
 - 2026-06-01: Appended Operational Appendix with transport, auth, secrets, rate-limiting, deduplication, DB sketch, testing, observability, privacy, legal checklist, CLI helpers, and next steps.
 - 2026-06-01: Review pass — added alert-source dependency note to `jobs.import_alert_email` (§4.2); `url` field provenance caveat (§8.2); STDIO DevMode bypass requirement (§14.2); phase 1 `.env` guidance (§14.3); dedupe TTL and unique-constraint consistency decision (§14.5); `runs` table indexes and `source_fetches.warnings` schema contract (§14.6); phase 1 gate on open questions Q1/Q2 (§10); MCP spec URL staleness flag (§13).

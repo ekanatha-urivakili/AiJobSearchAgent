@@ -110,9 +110,12 @@ public sealed class JobSearchMcpService
     {
         var sources = CreatePolicies().Select(policy =>
         {
-            var requiredSecret = policy.SourceName.Equals("Reed", StringComparison.OrdinalIgnoreCase)
-                ? "REED_API_KEY"
-                : null;
+            var requiredSecret = policy.SourceName switch
+            {
+                var s when s.Equals("Reed", StringComparison.OrdinalIgnoreCase) => "REED_API_KEY",
+                var s when s.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON",
+                _ => null
+            };
             var ready = policy.Enabled
                 && policy.FetchMode != FetchMode.Disabled
                 && (requiredSecret is null || !string.IsNullOrWhiteSpace(credentials.GetSecret(requiredSecret)));
@@ -154,7 +157,7 @@ public sealed class JobSearchMcpService
     [
         new("Reed", FetchMode.ApprovedApi, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY")), TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
         new("JobServe", FetchMode.AlertInbox, Enabled: false, TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
-        new("Indeed UK", FetchMode.Disabled, Enabled: false, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 1)),
+        new("Indeed UK", FetchMode.AlertInbox, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON")), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
         new("Cord", FetchMode.Disabled, Enabled: false, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 1))
     ];
 
@@ -175,7 +178,12 @@ public sealed class JobSearchMcpService
 
         if (selectedSources.Contains("Indeed UK") || selectedSources.Contains("Indeed"))
         {
-            yield return new PolicyBlockedSourceAdapter("Indeed UK", "Source disabled until approved API access or alert ingestion is configured.");
+            var credJson = credentials.GetSecret("GMAIL_CREDENTIALS_JSON");
+            var indeedQuery = credentials.GetSecret("INDEED_GMAIL_SEARCH_QUERY")
+                ?? "from:jobalerts-noreply@indeed.com is:unread";
+            yield return string.IsNullOrWhiteSpace(credJson)
+                ? new PolicyBlockedSourceAdapter("Indeed UK", "GMAIL_CREDENTIALS_JSON is not configured.")
+                : new IndeedAlertJobSourceAdapter(credJson, indeedQuery);
         }
 
         if (selectedSources.Contains("Cord"))

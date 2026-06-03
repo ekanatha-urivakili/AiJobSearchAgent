@@ -3,7 +3,7 @@ WORKDIR /src
 COPY AiJobSearchAgent.slnx ./
 COPY src/AiJobSearchAgent.Core/AiJobSearchAgent.Core.csproj src/AiJobSearchAgent.Core/
 COPY src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj src/AiJobSearchAgent.Worker/
-RUN dotnet restore AiJobSearchAgent.slnx
+RUN dotnet restore src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj
 COPY . .
 RUN dotnet publish src/AiJobSearchAgent.Worker/AiJobSearchAgent.Worker.csproj -c Release -o /app/publish
 

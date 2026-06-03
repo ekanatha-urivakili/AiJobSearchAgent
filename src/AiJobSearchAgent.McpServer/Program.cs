@@ -54,10 +54,16 @@ static async Task RunHttpAsync(string[] args)
     app.Urls.Add("http://localhost:5001");
     app.UseCors("Frontend");
 
+    // Ensure the app_settings table exists (idempotent, safe to run on every start)
+    var settings = app.Services.GetRequiredService<SettingsRepository>();
+    await settings.EnsureSchemaAsync();
+    await ApplySettingsToEnvironmentAsync(settings, CancellationToken.None);
+
     app.MapGet("/api/jobs/search", async (JobSearchMcpService service, CancellationToken ct) =>
     {
         var response = await service.SearchJobsAsync(SearchJobsRequest.Default, ct);
-        return Results.Ok(response.Matches);
+        // Return full response so the dashboard can show source status and rejection summary
+        return Results.Ok(response);
     });
 
     app.MapGet("/api/jobs/{source}/{sourceJobId}", async (string source, string sourceJobId, JobSearchMcpService service, CancellationToken ct) =>
@@ -66,44 +72,103 @@ static async Task RunHttpAsync(string[] args)
         return Results.Ok(response);
     });
 
-    app.MapGet("/api/config", () =>
+    app.MapGet("/api/config", async (SettingsRepository db, CancellationToken ct) =>
     {
-        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-        if (!File.Exists(envPath)) return Results.Ok(new Dictionary<string, string>());
-
-        var lines = File.ReadAllLines(envPath);
-        var config = lines
-            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"))
-            .Select(line => line.Split('=', 2))
-            .Where(parts => parts.Length == 2)
-            .ToDictionary(parts => parts[0].Trim(), parts => parts[1].Trim().Trim('"'));
-
-        return Results.Ok(config);
-    });
-
-    app.MapPost("/api/config", async (Dictionary<string, string> newConfig) =>
-    {
-        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-        var lines = File.Exists(envPath) ? File.ReadAllLines(envPath).ToList() : new List<string>();
-
-        foreach (var kvp in newConfig)
+        var result = new Dictionary<string, string>(SettingsRepository.DefaultValues, StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in ReadEnvFile())
         {
-            var index = lines.FindIndex(l => l.StartsWith($"{kvp.Key}="));
-            if (index >= 0)
-            {
-                lines[index] = $"{kvp.Key}=\"{kvp.Value}\"";
-            }
-            else
-            {
-                lines.Add($"{kvp.Key}=\"{kvp.Value}\"");
-            }
+            if (SettingsRepository.ConfigurableKeys.Contains(key))
+                result[key] = value;
         }
 
-        await File.WriteAllLinesAsync(envPath, lines);
+        var dbSettings = await db.GetAllAsync(ct);
+        foreach (var (k, v) in dbSettings)
+        {
+            if (SettingsRepository.ConfigurableKeys.Contains(k))
+                result[k] = v;
+        }
+
+        var configuredSecretKeys = result
+            .Where(kv => SettingsRepository.SecretKeys.Contains(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+            .Select(kv => kv.Key)
+            .ToArray();
+
+        foreach (var key in SettingsRepository.SecretKeys)
+        {
+            if (result.ContainsKey(key))
+                result[key] = string.Empty;
+        }
+
+        result["__secretKeys"] = string.Join(",", SettingsRepository.SecretKeys);
+        result["__configuredSecretKeys"] = string.Join(",", configuredSecretKeys);
+        return Results.Ok(result);
+    });
+
+    app.MapPost("/api/config", async (Dictionary<string, string> newConfig, SettingsRepository db, CancellationToken ct) =>
+    {
+        var settingsToSave = newConfig
+            .Where(kv => SettingsRepository.ConfigurableKeys.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
+        await db.SaveAsync(settingsToSave, ct);
+        foreach (var (key, value) in settingsToSave)
+        {
+            if (SettingsRepository.SecretKeys.Contains(key) && string.IsNullOrEmpty(value)) continue;
+            Environment.SetEnvironmentVariable(key, value);
+        }
+
         return Results.NoContent();
     });
 
+    app.MapGet("/api/config/meta", () =>
+        Results.Ok(new { secretKeys = SettingsRepository.SecretKeys, dbAvailable = app.Services.GetRequiredService<SettingsRepository>().IsAvailable }));
+
     await app.RunAsync();
+}
+
+static Dictionary<string, string> ReadEnvFile()
+{
+    var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    var envPath = FindEnvPath();
+    if (!File.Exists(envPath)) return result;
+
+    foreach (var line in File.ReadAllLines(envPath))
+    {
+        var trimmed = line.Trim();
+        if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#')) continue;
+        var idx = trimmed.IndexOf('=');
+        if (idx <= 0) continue;
+        var key = trimmed[..idx].Trim();
+        var raw = trimmed[(idx + 1)..].Trim();
+        var value = raw.Length >= 2 && ((raw[0] == '"' && raw[^1] == '"') || (raw[0] == '\'' && raw[^1] == '\''))
+            ? raw[1..^1] : raw;
+        result[key] = value;
+    }
+    return result;
+}
+
+static async Task ApplySettingsToEnvironmentAsync(SettingsRepository settings, CancellationToken ct)
+{
+    var saved = await settings.GetAllAsync(ct);
+    foreach (var (key, value) in saved)
+    {
+        if (SettingsRepository.ConfigurableKeys.Contains(key))
+            Environment.SetEnvironmentVariable(key, value);
+    }
+}
+
+static string? FindEnvPath()
+{
+    var dir = AppContext.BaseDirectory;
+    for (var i = 0; i < 8; i++)
+    {
+        var candidate = Path.Combine(dir, ".env");
+        if (File.Exists(candidate)) return candidate;
+        var parent = Directory.GetParent(dir);
+        if (parent is null) break;
+        dir = parent.FullName;
+    }
+    return null;
 }
 
 static void RegisterShared(IServiceCollection services)
@@ -112,4 +177,10 @@ static void RegisterShared(IServiceCollection services)
     services.AddHttpClient("Reed");
     services.AddSingleton<CredentialProvider>();
     services.AddSingleton<JobSearchMcpService>();
+    services.AddSingleton(sp =>
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL");
+        var encryptionKey    = Environment.GetEnvironmentVariable("SETTINGS_ENCRYPTION_KEY");
+        return new SettingsRepository(connectionString, encryptionKey);
+    });
 }

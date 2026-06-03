@@ -1,67 +1,106 @@
-import type { EmploymentType, JobResult, WorkMode } from "./types";
+import type { EmploymentType, JobDetail, JobResult, SourceStatus, WorkMode } from "./types";
 
-  const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:5001";
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:5001";
+
+/* ── raw DTO shapes ──────────────────────────────────────────────────────── */
 
 interface JobMatchDto {
-  source: string;
-  sourceJobId: string;
-  title: string;
-  company: string;
-  location: string;
-  distanceMiles: number;
-  employmentType: EmploymentType;
-  workMode: WorkMode;
-  salaryMin: number | null;
-  salaryMax: number | null;
-  dayRateMin: number | null;
-  dayRateMax: number | null;
-  contractMonths: number | null;
-  postedDate: string;
-  score: number;
-  recommended: boolean;
-  reasons: string[];
-  risks: string[];
-  url: string;
+  source: string; sourceJobId: string; title: string; company: string;
+  location: string; distanceMiles: number; employmentType: EmploymentType;
+  workMode: WorkMode; salaryMin: number | null; salaryMax: number | null;
+  dayRateMin: number | null; dayRateMax: number | null;
+  contractMonths: number | null; postedDate: string; score: number;
+  recommended: boolean; reasons: string[]; risks: string[]; url: string;
 }
 
-export type FetchResult =
-  | { status: "ok"; jobs: JobResult[] }
-  | { status: "error"; message: string };
+interface JobDto {
+  source: string; sourceJobId: string; url: string; title: string;
+  company: string; location: string; distanceMiles: number;
+  employmentType: EmploymentType; workMode: WorkMode;
+  salaryMin: number | null; salaryMax: number | null;
+  dayRateMin: number | null; dayRateMax: number | null;
+  contractMonths: number | null; postedDate: string; description: string;
+}
+
+interface SearchResponse {
+  runId: string;
+  reportResource: string;
+  sourceStatus: SourceStatus[];
+  matches: JobMatchDto[];
+  rejectedSummary: Record<string, number>;
+}
+
+/* ── mappers ─────────────────────────────────────────────────────────────── */
 
 function mapMatch(dto: JobMatchDto): JobResult {
   return {
     id: `${dto.source.toLowerCase()}-${dto.sourceJobId}`,
-    source: dto.source,
-    title: dto.title,
-    company: dto.company,
-    location: dto.location,
-    distanceMiles: dto.distanceMiles,
-    employmentType: dto.employmentType,
+    source: dto.source, sourceJobId: dto.sourceJobId,
+    title: dto.title, company: dto.company, location: dto.location,
+    distanceMiles: dto.distanceMiles, employmentType: dto.employmentType,
     workMode: dto.workMode,
-    salaryMinGbp: dto.salaryMin ?? undefined,
-    salaryMaxGbp: dto.salaryMax ?? undefined,
-    dayRateMinGbp: dto.dayRateMin ?? undefined,
-    dayRateMaxGbp: dto.dayRateMax ?? undefined,
+    salaryMinGbp: dto.salaryMin ?? undefined, salaryMaxGbp: dto.salaryMax ?? undefined,
+    dayRateMinGbp: dto.dayRateMin ?? undefined, dayRateMaxGbp: dto.dayRateMax ?? undefined,
     contractMonths: dto.contractMonths ?? undefined,
-    postedDate: dto.postedDate,
-    score: dto.score,
-    recommended: dto.recommended,
-    reasons: dto.reasons ?? [],
-    risks: dto.risks ?? [],
-    url: dto.url ?? "",
+    postedDate: typeof dto.postedDate === "string" ? dto.postedDate : String(dto.postedDate),
+    score: dto.score, recommended: dto.recommended,
+    reasons: dto.reasons ?? [], risks: dto.risks ?? [], url: dto.url ?? "",
   };
 }
+
+function mapDetail(dto: JobDto): JobDetail {
+  return {
+    id: `${dto.source.toLowerCase()}-${dto.sourceJobId}`,
+    source: dto.source, sourceJobId: dto.sourceJobId,
+    title: dto.title, company: dto.company, location: dto.location,
+    distanceMiles: dto.distanceMiles, employmentType: dto.employmentType,
+    workMode: dto.workMode,
+    salaryMinGbp: dto.salaryMin ?? undefined, salaryMaxGbp: dto.salaryMax ?? undefined,
+    dayRateMinGbp: dto.dayRateMin ?? undefined, dayRateMaxGbp: dto.dayRateMax ?? undefined,
+    contractMonths: dto.contractMonths ?? undefined,
+    postedDate: typeof dto.postedDate === "string" ? dto.postedDate : String(dto.postedDate),
+    score: 0, recommended: false, reasons: [], risks: [],
+    url: dto.url ?? "", description: dto.description ?? "",
+  };
+}
+
+/* ── public API ──────────────────────────────────────────────────────────── */
+
+export type FetchResult =
+  | { status: "ok"; jobs: JobResult[]; sourceStatus: SourceStatus[]; rejectedSummary: Record<string, number> }
+  | { status: "error"; message: string };
 
 export async function fetchMatches(): Promise<FetchResult> {
   try {
     const res = await fetch(`${BASE_URL}/api/jobs/search`);
-    if (!res.ok) {
-      return { status: "error", message: `API responded with ${res.status} ${res.statusText}` };
+    if (!res.ok) return { status: "error", message: `API ${res.status} ${res.statusText}` };
+    const data: JobMatchDto[] | SearchResponse = await res.json();
+    // Handle both old array response and new SearchResponse shape
+    if (Array.isArray(data)) {
+      return { status: "ok", jobs: data.map(mapMatch), sourceStatus: [], rejectedSummary: {} };
     }
-    const matches: JobMatchDto[] = await res.json();
-    return { status: "ok", jobs: matches.map(mapMatch) };
+    return {
+      status: "ok",
+      jobs: data.matches.map(mapMatch),
+      sourceStatus: data.sourceStatus ?? [],
+      rejectedSummary: data.rejectedSummary ?? {},
+    };
   } catch {
-    return { status: "error", message: "Could not reach the job search API. Is the server running with --http?" };
+    return { status: "error", message: "Could not reach the API. Is the server running with --http?" };
+  }
+}
+
+export type DetailResult = { status: "ok"; job: JobDetail } | { status: "error"; message: string };
+
+export async function fetchJobDetail(source: string, sourceJobId: string): Promise<DetailResult> {
+  try {
+    const res = await fetch(`${BASE_URL}/api/jobs/${encodeURIComponent(source)}/${encodeURIComponent(sourceJobId)}`);
+    if (!res.ok) return { status: "error", message: `API ${res.status}` };
+    const body: { found: boolean; job?: JobDto; message?: string } = await res.json();
+    if (!body.found || !body.job) return { status: "error", message: body.message ?? "Not found" };
+    return { status: "ok", job: mapDetail(body.job) };
+  } catch {
+    return { status: "error", message: "Could not reach the API." };
   }
 }
 

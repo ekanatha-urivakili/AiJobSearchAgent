@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="1.2.0" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
   </ItemGroup>
 
   <PropertyGroup>

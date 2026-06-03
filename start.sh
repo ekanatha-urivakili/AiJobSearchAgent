@@ -15,6 +15,39 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Kill any process listening on a TCP port (macOS / Linux via lsof)
+# Skip processes that look like browsers (Chrome, Safari, Firefox, Edge, Chromium).
+kill_on_port() {
+  local port="$1"
+  if ! command -v lsof &>/dev/null; then
+    log "lsof not found; skipping port $port cleanup"
+    return
+  fi
+  local pids
+  pids=$(lsof -ti tcp:"$port" || true)
+  if [[ -z "${pids// /}" ]]; then
+    return
+  fi
+  for pid in $pids; do
+    local comm args comm_lc args_lc
+    comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+    args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+    comm_lc=$(printf '%s' "$comm" | tr '[:upper:]' '[:lower:]')
+    args_lc=$(printf '%s' "$args" | tr '[:upper:]' '[:lower:]')
+    if [[ "$comm_lc" == *chrome* ]] || [[ "$comm_lc" == *safari* ]] || [[ "$comm_lc" == *firefox* ]] || [[ "$comm_lc" == *chromium* ]] || [[ "$comm_lc" == *edge* ]] || [[ "$args_lc" == *chrome* ]] || [[ "$args_lc" == *safari* ]] || [[ "$args_lc" == *firefox* ]] || [[ "$args_lc" == *chromium* ]] || [[ "$args_lc" == *edge* ]]; then
+      log "Skipping browser process on port $port (PID $pid, $comm $args)"
+      continue
+    fi
+    log "Killing process on port $port: PID $pid ($comm $args)"
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      log "Process $pid still running; force-killing"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
 # ── preflight ──────────────────────────────────────────────────────────────────
 for cmd in dotnet node npm docker; do
   if ! command -v "$cmd" &>/dev/null; then
@@ -59,6 +92,7 @@ log "Building backend…"
 dotnet build "$ROOT/AiJobSearchAgent.slnx" --configuration Debug --nologo -v q
 
 log "Starting backend (HTTP mode, port 5001)…"
+kill_on_port 5001
 dotnet run \
   --project "$ROOT/src/AiJobSearchAgent.McpServer/AiJobSearchAgent.McpServer.csproj" \
   --configuration Debug \
@@ -89,6 +123,7 @@ log "Installing frontend dependencies…"
 npm --prefix "$ROOT/frontend" install --silent
 
 log "Starting frontend (Vite, port 5173)…"
+kill_on_port 5173
 npm --prefix "$ROOT/frontend" run dev &
 FRONTEND_PID=$!
 ok "Frontend PID $FRONTEND_PID"

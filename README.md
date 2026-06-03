@@ -45,6 +45,7 @@ flowchart TD
     subgraph Sources
         ReedAdapter["Reed API Adapter"]
         GmailAdapter["GmailAlertJobSourceAdapter\n(Google.Apis.Gmail.v1)"]
+        IndeedAdapter["IndeedAlertJobSourceAdapter\n(Indeed alert emails via Gmail)"]
     end
 
     subgraph Reporters
@@ -68,6 +69,7 @@ flowchart TD
     Orchestrator --> PolicyGuard
     Orchestrator --> ReedAdapter
     Orchestrator --> GmailAdapter
+    Orchestrator --> IndeedAdapter
     Orchestrator --> FilterEngine
     FilterEngine --> Scorer
     Scorer --> Dedup
@@ -75,6 +77,7 @@ flowchart TD
     Dedup --> SlackReporter
 
     GmailAdapter --> Gmail[("Gmail API")]
+    IndeedAdapter --> Gmail
     ReedAdapter --> ReedAPI[("Reed API")]
     SlackReporter --> Slack[("Slack Webhook")]
     MdReporter --> Reports[("reports/")]
@@ -178,6 +181,7 @@ sequenceDiagram
 | Min contract day rate | £400/day | `JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP` |
 | Min contract duration | 6 months | `JOB_SEARCH_MIN_CONTRACT_MONTHS` |
 | Run time | 10:00 Europe/London | `JOB_SEARCH_RUN_AT` |
+| Indeed alert query | `from:jobalerts-noreply@indeed.com is:unread` | `INDEED_GMAIL_SEARCH_QUERY` |
 
 Target titles: Senior Software Engineer, Senior Fullstack Engineer, Senior Software Developer, Lead Developer, Lead Software Engineer, Principal Engineer, Principal Developer.
 
@@ -244,6 +248,18 @@ label:jobs -label:applied
 ```
 
 Default is `label:job-alerts is:unread`. Override this to narrow or broaden which emails are parsed for job postings.
+
+### Indeed Job Alert Emails
+
+Indeed job alerts are ingested from your Gmail inbox using the same service account as the Gmail adapter. Set up a saved search on Indeed and enable email job alerts for your account.
+
+Set `INDEED_GMAIL_SEARCH_QUERY` to target Indeed alert emails specifically:
+
+```
+INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
+```
+
+The adapter extracts the stable Indeed job key (`jk` parameter) from each alert link and maps it to a canonical `https://uk.indeed.com/viewjob?jk=...` URL. Salary, location, employment type, and description are parsed from the email HTML. If `GMAIL_CREDENTIALS_JSON` is configured, Indeed is automatically enabled.
 
 ### Settings Panel
 
