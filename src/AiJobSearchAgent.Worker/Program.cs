@@ -34,7 +34,12 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     var criteria = Defaults.CreateCriteria(today);
     var profile = Defaults.CreateCvProfile();
     var policies = Defaults.CreateSourcePolicies();
-    var sources = SampleSources.Create(today);
+    var sources = new List<IJobSourceAdapter>(SampleSources.Create(today))
+    {
+        new GmailAlertJobSourceAdapter(
+            Environment.GetEnvironmentVariable("GMAIL_CREDENTIALS_JSON"),
+            Environment.GetEnvironmentVariable("GMAIL_SEARCH_QUERY") ?? "label:job-alerts is:unread")
+    };
 
     var orchestrator = new JobSearchOrchestrator(
         sources,
@@ -43,15 +48,19 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
         new CvMatchScorer());
 
     var result = await orchestrator.RunAsync(criteria, profile, cancellationToken);
-    var report = new MarkdownReportGenerator().Generate(result, criteria);
 
-    var outputDirectory = Path.Combine(AppContext.BaseDirectory, "reports");
-    Directory.CreateDirectory(outputDirectory);
+    using var httpClient = new HttpClient();
+    var reporters = new IJobReporter[]
+    {
+        new MarkdownFileJobReporter(Path.Combine(AppContext.BaseDirectory, "reports")),
+        new SlackJobReporter(httpClient, Environment.GetEnvironmentVariable("SLACK_WEBHOOK_URL"))
+    };
 
-    var reportPath = Path.Combine(outputDirectory, $"daily-job-matches-{criteria.PostedTo:yyyy-MM-dd}.md");
-    await File.WriteAllTextAsync(reportPath, report, cancellationToken);
+    foreach (var reporter in reporters)
+    {
+        await reporter.ReportAsync(result, criteria, cancellationToken);
+    }
 
-    Console.WriteLine($"Report generated: {reportPath}");
     Console.WriteLine($"Matches: {result.Matches.Count}");
 }
 

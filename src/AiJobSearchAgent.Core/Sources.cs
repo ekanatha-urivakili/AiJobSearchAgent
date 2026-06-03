@@ -1,3 +1,9 @@
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Gmail.v1;
+using Google.Apis.Gmail.v1.Data;
+using Google.Apis.Services;
+using HtmlAgilityPack;
+
 namespace AiJobSearchAgent.Core;
 
 public interface IJobSourceAdapter
@@ -29,6 +35,137 @@ public sealed class SourcePolicyGuard
         }
 
         return new(true, $"Allowed via {policy.FetchMode}");
+    }
+}
+
+public sealed class GmailAlertJobSourceAdapter : IJobSourceAdapter
+{
+    private readonly string credentialsJson;
+    private readonly string query;
+
+    public GmailAlertJobSourceAdapter(string? credentialsJson, string query = "label:job-alerts is:unread")
+    {
+        this.credentialsJson = credentialsJson ?? string.Empty;
+        this.query = query;
+    }
+
+    public string SourceName => "Gmail Alerts";
+
+    public async Task<SourceFetchResult> FetchAsync(JobSearchCriteria criteria, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson))
+        {
+            return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), ["Gmail credentials not configured."]);
+        }
+
+        try
+        {
+            var credential = GoogleCredential.FromJson(credentialsJson)
+                .CreateScoped(GmailService.Scope.GmailReadonly);
+
+            var service = new GmailService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "AiJobSearchAgent"
+            });
+
+            var listRequest = service.Users.Messages.List("me");
+            listRequest.Q = query;
+            var response = await listRequest.ExecuteAsync(cancellationToken);
+
+            if (response.Messages == null || response.Messages.Count == 0)
+            {
+                return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), Array.Empty<string>());
+            }
+
+            var jobs = new List<JobPosting>();
+            var warnings = new List<string>();
+
+            foreach (var msgSummary in response.Messages)
+            {
+                var message = await service.Users.Messages.Get("me", msgSummary.Id).ExecuteAsync(cancellationToken);
+                var body = GetMessageBody(message);
+
+                if (string.IsNullOrWhiteSpace(body)) continue;
+
+                var extractedJobs = ParseAlertEmail(body, message.Id);
+                jobs.AddRange(extractedJobs);
+            }
+
+            return new SourceFetchResult(SourceName, jobs, warnings);
+        }
+        catch (Exception ex)
+        {
+            return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), [$"Gmail error: {ex.Message}"]);
+        }
+    }
+
+    private static string GetMessageBody(Message message)
+    {
+        if (message.Payload.Body.Data != null)
+        {
+            return DecodeBase64(message.Payload.Body.Data);
+        }
+
+        if (message.Payload.Parts != null)
+        {
+            foreach (var part in message.Payload.Parts)
+            {
+                if (part.MimeType == "text/html" && part.Body.Data != null)
+                {
+                    return DecodeBase64(part.Body.Data);
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static string DecodeBase64(string base64)
+    {
+        var data = Convert.FromBase64String(base64.Replace('-', '+').Replace('_', '/'));
+        return System.Text.Encoding.UTF8.GetString(data);
+    }
+
+    private static IReadOnlyCollection<JobPosting> ParseAlertEmail(string html, string messageId)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var jobs = new List<JobPosting>();
+        
+        var links = doc.DocumentNode.SelectNodes("//a");
+        if (links == null) return jobs;
+
+        foreach (var link in links)
+        {
+            var urlStr = link.GetAttributeValue("href", "");
+            if (string.IsNullOrEmpty(urlStr) || !Uri.TryCreate(urlStr, UriKind.Absolute, out var url)) continue;
+
+            var text = link.InnerText.Trim();
+            
+            if (urlStr.Contains("/jobs/") || urlStr.Contains("/job/"))
+            {
+                if (text.Length > 15)
+                {
+                    jobs.Add(new JobPosting(
+                        "GmailAlert",
+                        $"{messageId}_{Guid.NewGuid():N}",
+                        url,
+                        text,
+                        "Unknown",
+                        "Unknown",
+                        0,
+                        EmploymentType.Permanent,
+                        WorkMode.Hybrid,
+                        null, null, null, null, null,
+                        DateOnly.FromDateTime(DateTime.Today),
+                        "Job alert match. Details in link."));
+                }
+            }
+        }
+
+        return jobs;
     }
 }
 

@@ -1,6 +1,6 @@
 import type { EmploymentType, JobResult, WorkMode } from "./types";
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:5000";
+  const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:5001";
 
 interface JobMatchDto {
   source: string;
@@ -63,4 +63,19 @@ export async function fetchMatches(): Promise<FetchResult> {
   } catch {
     return { status: "error", message: "Could not reach the job search API. Is the server running with --http?" };
   }
+}
+
+export async function getConfig(): Promise<Record<string, string>> {
+  const res = await fetch(`${BASE_URL}/api/config`);
+  if (!res.ok) throw new Error("Failed to fetch config");
+  return res.json();
+}
+
+export async function saveConfig(config: Record<string, string>): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error("Failed to save config");
 }

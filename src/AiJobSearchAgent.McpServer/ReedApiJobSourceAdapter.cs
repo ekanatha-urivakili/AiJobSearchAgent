@@ -204,8 +204,18 @@ public sealed class ReedApiJobSourceAdapter : IJobSourceAdapter
         return null;
     }
 
-    private static DateOnly? ParseDate(DateTimeOffset? value) =>
-        value is null ? null : DateOnly.FromDateTime(value.Value.UtcDateTime);
+    private static DateOnly? ParseDate(string? value)
+    {
+        if (value is null) return null;
+        if (DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var dto))
+            return DateOnly.FromDateTime(dto.UtcDateTime);
+        string[] formats = ["dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-dd"];
+        if (DateOnly.TryParseExact(value, formats, null,
+                System.Globalization.DateTimeStyles.None, out var d))
+            return d;
+        return null;
+    }
 
     private sealed record ReedSearchResponse(IReadOnlyCollection<ReedJobDto>? Results);
 
@@ -221,5 +231,5 @@ public sealed class ReedApiJobSourceAdapter : IJobSourceAdapter
         string? JobUrl,
         string? JobType,
         double? Distance,
-        DateTimeOffset? Date);
+        string? Date);
 }

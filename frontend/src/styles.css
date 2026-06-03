@@ -46,9 +46,113 @@ select {
   border: 1px solid var(--border);
   display: grid;
   gap: 28px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   min-height: 240px;
   padding: 40px;
+}
+
+.summary-actions {
+  align-self: start;
+}
+
+.settings-toggle {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: #17221f;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 10px 20px;
+}
+
+.settings-toggle:hover {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.settings-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  margin-top: 24px;
+  padding: 40px;
+  box-shadow: var(--shadow);
+}
+
+.settings-header h2 {
+  font-size: 2rem;
+  margin-bottom: 8px;
+}
+
+.settings-header p {
+  color: var(--ink-muted);
+  margin-bottom: 32px;
+}
+
+.settings-form {
+  display: grid;
+  gap: 24px;
+  max-width: 800px;
+}
+
+.form-group {
+  display: grid;
+  gap: 8px;
+}
+
+.form-group label {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.form-group input,
+.form-group textarea {
+  background: #f9fbf9;
+  border: 1px solid var(--border);
+  padding: 12px;
+  width: 100%;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.save-btn {
+  background: var(--green);
+  border: 0;
+  color: white;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 14px 28px;
+}
+
+.save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-weight: 700;
+  padding: 14px 28px;
+}
+
+.message {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.message.success {
+  color: var(--green);
+}
+
+.message.error {
+  color: var(--amber);
 }
 
 .eyebrow {

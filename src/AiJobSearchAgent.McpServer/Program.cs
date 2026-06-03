@@ -36,6 +36,9 @@ static async Task RunHttpAsync(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    var port = Environment.GetEnvironmentVariable("PORT") ?? "5005";
+    builder.WebHost.UseUrls($"http://*:{port}");
+
     RegisterShared(builder.Services);
 
     var allowedOrigins = (Environment.GetEnvironmentVariable("ALLOWED_ORIGINS") ?? "http://localhost:5173")
@@ -46,6 +49,9 @@ static async Task RunHttpAsync(string[] args)
             policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod()));
 
     var app = builder.Build();
+
+    // Force the minimal API to listen on localhost:5001 to avoid conflicts with system services on :5000
+    app.Urls.Add("http://localhost:5001");
     app.UseCors("Frontend");
 
     app.MapGet("/api/jobs/search", async (JobSearchMcpService service, CancellationToken ct) =>
@@ -58,6 +64,43 @@ static async Task RunHttpAsync(string[] args)
     {
         var response = await service.GetJobAsync(source, sourceJobId, ct);
         return Results.Ok(response);
+    });
+
+    app.MapGet("/api/config", () =>
+    {
+        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+        if (!File.Exists(envPath)) return Results.Ok(new Dictionary<string, string>());
+
+        var lines = File.ReadAllLines(envPath);
+        var config = lines
+            .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"))
+            .Select(line => line.Split('=', 2))
+            .Where(parts => parts.Length == 2)
+            .ToDictionary(parts => parts[0].Trim(), parts => parts[1].Trim().Trim('"'));
+
+        return Results.Ok(config);
+    });
+
+    app.MapPost("/api/config", async (Dictionary<string, string> newConfig) =>
+    {
+        var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+        var lines = File.Exists(envPath) ? File.ReadAllLines(envPath).ToList() : new List<string>();
+
+        foreach (var kvp in newConfig)
+        {
+            var index = lines.FindIndex(l => l.StartsWith($"{kvp.Key}="));
+            if (index >= 0)
+            {
+                lines[index] = $"{kvp.Key}=\"{kvp.Value}\"";
+            }
+            else
+            {
+                lines.Add($"{kvp.Key}=\"{kvp.Value}\"");
+            }
+        }
+
+        await File.WriteAllLinesAsync(envPath, lines);
+        return Results.NoContent();
     });
 
     await app.RunAsync();

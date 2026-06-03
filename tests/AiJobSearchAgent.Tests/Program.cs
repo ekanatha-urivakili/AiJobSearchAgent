@@ -13,6 +13,8 @@ var tests = new (string Name, Action Test)[]
     ("Old postings outside date range are rejected", OldPostingIsRejected),
     ("Office jobs outside radius are rejected", OfficeJobOutsideRadiusIsRejected),
     ("CV scorer penalises jobs with few keyword matches", LowKeywordMatchIsNotRecommended),
+    ("Slack reporter skips when URL is null", SlackReporterSkipsWhenUrlIsNull),
+    ("Gmail adapter returns warning when credentials are null", GmailAdapterReturnsWarningWhenCredentialsAreNull),
 };
 
 var failures = new List<string>();
@@ -209,6 +211,27 @@ static void TitleMatchingWorksByContains()
     var nonMatchingDecision = filter.Evaluate(nonMatchingJob, criteria);
     AssertFalse(nonMatchingDecision.Accepted);
     AssertEqual("Title mismatch", nonMatchingDecision.Reason);
+}
+
+static void SlackReporterSkipsWhenUrlIsNull()
+{
+    var reporter = new SlackJobReporter(new HttpClient(), null);
+    var result = new SearchRunResult(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, Array.Empty<SourceFetchResult>(), Array.Empty<JobMatch>(), new Dictionary<string, int>());
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 6, 2));
+
+    // Should not throw
+    reporter.ReportAsync(result, criteria, CancellationToken.None).Wait();
+}
+
+static void GmailAdapterReturnsWarningWhenCredentialsAreNull()
+{
+    var adapter = new GmailAlertJobSourceAdapter(null);
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 6, 2));
+    var result = adapter.FetchAsync(criteria, CancellationToken.None).Result;
+
+    AssertEqual(0, result.Jobs.Count);
+    AssertEqual(1, result.Warnings.Count);
+    AssertTrue(result.Warnings.First().Contains("Gmail credentials not configured"));
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

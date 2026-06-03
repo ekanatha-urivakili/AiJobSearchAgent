@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchMatches } from "./api";
+import { fetchMatches, getConfig, saveConfig } from "./api";
 import type { EmploymentType, JobResult, WorkMode } from "./types";
 import type { ReactElement } from "react";
 
@@ -85,6 +85,7 @@ function sortJobs(jobs: JobResult[], sortMode: SortMode): JobResult[] {
 }
 
 function App(): ReactElement {
+  const [view, setView] = useState<"results" | "settings">("results");
   const [recommendationFilter, setRecommendationFilter] = useState<RecommendationFilter>("All");
   const [workModeFilter, setWorkModeFilter] = useState<WorkMode | "All">("All");
   const [employmentFilter, setEmploymentFilter] = useState<EmploymentType | "All">("All");
@@ -169,6 +170,11 @@ function App(): ReactElement {
             Review scored job matches, scan risks, and open the original advert when you are ready to apply.
           </p>
         </div>
+        <div className="summary-actions">
+          <button className="settings-toggle" onClick={() => setView(view === "results" ? "settings" : "results")}>
+            {view === "results" ? "Settings" : "Back to Results"}
+          </button>
+        </div>
         <div className="summary-metrics" aria-label="Search summary">
           <Metric label="Results" value={jobResults.length.toString()} />
           <Metric label="Recommended" value={recommendedCount.toString()} />
@@ -176,7 +182,11 @@ function App(): ReactElement {
         </div>
       </section>
 
-      <section className="toolbar" aria-label="Filters">
+      {view === "settings" ? (
+        <Settings onClose={() => setView("results")} />
+      ) : (
+        <>
+          <section className="toolbar" aria-label="Filters">
         <label className="field-control">
           <span>Location</span>
           <input
@@ -269,7 +279,85 @@ function App(): ReactElement {
           </>
         )}
       </section>
+        </>
+      )}
     </main>
+  );
+}
+
+function Settings({ onClose }: { onClose: () => void }): ReactElement {
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    getConfig().then(setConfig).catch((err) => setMessage("Error loading config: " + err.message));
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await saveConfig(config);
+      setMessage("Config saved successfully!");
+    } catch (err: any) {
+      setMessage("Error saving config: " + err.message);
+    }
+    setSaving(false);
+  };
+
+  const handleChange = (key: string, value: string) => {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+  };
+
+  return (
+    <div className="settings-panel">
+      <div className="settings-header">
+        <h2>Configuration Settings</h2>
+        <p>Manage your Slack and Gmail credentials here. These are saved to your local .env file.</p>
+      </div>
+      <form className="settings-form" onSubmit={handleSave}>
+        <div className="form-group">
+          <label htmlFor="slack_webhook">Slack Webhook URL</label>
+          <input
+            id="slack_webhook"
+            onChange={(e) => handleChange("SLACK_WEBHOOK_URL", e.target.value)}
+            placeholder="https://hooks.slack.com/services/..."
+            type="text"
+            value={config["SLACK_WEBHOOK_URL"] || ""}
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="gmail_creds">Gmail Credentials JSON</label>
+          <textarea
+            id="gmail_creds"
+            onChange={(e) => handleChange("GMAIL_CREDENTIALS_JSON", e.target.value)}
+            placeholder='{"type": "service_account", ...}'
+            rows={8}
+            value={config["GMAIL_CREDENTIALS_JSON"] || ""}
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="gmail_query">Gmail Search Query</label>
+          <input
+            id="gmail_query"
+            onChange={(e) => handleChange("GMAIL_SEARCH_QUERY", e.target.value)}
+            placeholder="label:job-alerts is:unread"
+            type="text"
+            value={config["GMAIL_SEARCH_QUERY"] || ""}
+          />
+        </div>
+        <div className="form-actions">
+          <button className="save-btn" disabled={saving} type="submit">
+            {saving ? "Saving..." : "Save Configuration"}
+          </button>
+          <button className="cancel-btn" onClick={onClose} type="button">
+            Cancel
+          </button>
+          {message && <p className={message.includes("Error") ? "message error" : "message success"}>{message}</p>}
+        </div>
+      </form>
+    </div>
   );
 }
 

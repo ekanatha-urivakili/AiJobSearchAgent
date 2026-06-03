@@ -1,6 +1,69 @@
 using System.Text;
+using System.Text.Json;
 
 namespace AiJobSearchAgent.Core;
+
+public interface IJobReporter
+{
+    Task ReportAsync(SearchRunResult result, JobSearchCriteria criteria, CancellationToken cancellationToken);
+}
+
+public sealed class MarkdownFileJobReporter : IJobReporter
+{
+    private readonly string outputDirectory;
+    private readonly MarkdownReportGenerator generator = new();
+
+    public MarkdownFileJobReporter(string outputDirectory)
+    {
+        this.outputDirectory = outputDirectory;
+    }
+
+    public async Task ReportAsync(SearchRunResult result, JobSearchCriteria criteria, CancellationToken cancellationToken)
+    {
+        var report = generator.Generate(result, criteria);
+        Directory.CreateDirectory(outputDirectory);
+        var reportPath = Path.Combine(outputDirectory, $"daily-job-matches-{criteria.PostedTo:yyyy-MM-dd}.md");
+        await File.WriteAllTextAsync(reportPath, report, cancellationToken);
+    }
+}
+
+public sealed class SlackJobReporter : IJobReporter
+{
+    private readonly HttpClient httpClient;
+    private readonly Uri? webhookUrl;
+
+    public SlackJobReporter(HttpClient httpClient, string? webhookUrl)
+    {
+        this.httpClient = httpClient;
+        if (Uri.TryCreate(webhookUrl, UriKind.Absolute, out var uri))
+        {
+            this.webhookUrl = uri;
+        }
+    }
+
+    public async Task ReportAsync(SearchRunResult result, JobSearchCriteria criteria, CancellationToken cancellationToken)
+    {
+        if (webhookUrl is null) return;
+
+        var strongMatches = result.Matches.Where(m => m.Score >= 85).ToArray();
+        if (strongMatches.Length == 0) return;
+
+        var payload = new
+        {
+            text = $"🚀 *{strongMatches.Length} Strong Job Matches Found!*",
+            attachments = strongMatches.Select(m => new
+            {
+                title = $"{m.Job.Title} @ {m.Job.Company}",
+                title_link = m.Job.Url.ToString(),
+                text = $"Score: {m.Score}\nLocation: {m.Job.Location} ({m.Job.WorkMode})\nWhy: {string.Join("; ", m.Reasons)}",
+                color = "#36a64f"
+            }).ToArray()
+        };
+
+        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        await httpClient.PostAsync(webhookUrl, content, cancellationToken);
+    }
+}
 
 public sealed class MarkdownReportGenerator
 {
