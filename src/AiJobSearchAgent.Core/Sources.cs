@@ -529,17 +529,19 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
 }
 
 /// <summary>
-/// Holds jobs injected by Claude via the <c>jobs.ingest_indeed</c> MCP tool.
-/// Claude calls the Indeed MCP plugin, normalises results, then pushes them here
-/// before calling <c>jobs.search</c> so they flow through the standard filter/score pipeline.
+/// Generic in-memory adapter for jobs ingested via external MCP plugins (Indeed, Dice, ZipRecruiter, etc.).
+/// Claude fetches from the plugin, normalises results into <see cref="JobPosting"/>, then calls the
+/// corresponding <c>jobs.ingest_*</c> tool so the jobs flow through the standard filter/score pipeline.
 /// </summary>
-public sealed class IndeedDirectJobSourceAdapter : IJobSourceAdapter
+public sealed class PluginJobSourceAdapter : IJobSourceAdapter
 {
     private readonly System.Collections.Concurrent.ConcurrentBag<JobPosting> buffer = new();
 
-    public string SourceName => "Indeed Direct";
+    public PluginJobSourceAdapter(string sourceName) => SourceName = sourceName;
 
-    /// <summary>Adds a batch of pre-normalised jobs to the in-memory buffer.</summary>
+    public string SourceName { get; }
+
+    /// <summary>Adds a batch of pre-normalised jobs to the buffer.</summary>
     public void Ingest(IEnumerable<JobPosting> jobs)
     {
         foreach (var job in jobs)
@@ -559,9 +561,21 @@ public sealed class IndeedDirectJobSourceAdapter : IJobSourceAdapter
             return Task.FromResult(new SourceFetchResult(
                 SourceName,
                 Array.Empty<JobPosting>(),
-                ["No jobs ingested yet — call jobs.ingest_indeed before jobs.search."]));
+                [$"No jobs ingested yet — call jobs.ingest_{SourceName.ToLowerInvariant().Replace(" ", "_")} before jobs.search."]));
         }
 
         return Task.FromResult(new SourceFetchResult(SourceName, jobs, Array.Empty<string>()));
     }
+}
+
+/// <summary>Backward-compatible alias — use <see cref="PluginJobSourceAdapter"/> for new sources.</summary>
+public sealed class IndeedDirectJobSourceAdapter : IJobSourceAdapter
+{
+    private readonly PluginJobSourceAdapter inner = new("Indeed Direct");
+    public string SourceName => inner.SourceName;
+    public void Ingest(IEnumerable<JobPosting> jobs) => inner.Ingest(jobs);
+    public void Clear() => inner.Clear();
+    public int Count => inner.Count;
+    public Task<SourceFetchResult> FetchAsync(JobSearchCriteria criteria, CancellationToken ct) =>
+        inner.FetchAsync(criteria, ct);
 }

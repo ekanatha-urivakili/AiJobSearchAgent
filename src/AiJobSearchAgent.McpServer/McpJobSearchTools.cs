@@ -79,4 +79,47 @@ public sealed class McpJobSearchTools
         [Description("When true (default), clears previously ingested jobs before adding the new batch.")]
         bool clearFirst = true) =>
         service.IngestIndeedJobs(new(jobs, clearFirst));
+
+    [McpServerTool(Name = "jobs.ingest_dice", Destructive = false, ReadOnly = false)]
+    [Description("""
+        Ingest jobs fetched from the Dice MCP plugin into the local search pipeline.
+
+        Workflow:
+          1. Call the Dice MCP plugin's search_jobs tool with your keywords and location.
+          2. For each result map: guid → JobId, detailsPageUrl → Url, salary string → SalaryRaw,
+             workplaceTypes → WorkMode (Remote/Hybrid/Office), employmentType → EmploymentType.
+          3. Call this tool (ClearFirst=true to replace previous batch).
+          4. Call jobs.search with sources=["Dice"] or omit to include all sources.
+
+        Salary is parsed from Dice's "USD 170,000.00 - 270,000.00 per year" string automatically.
+        Note: Dice salaries are in USD. The filter uses the configured GBP threshold; adjust
+        minimumPermanentSalaryGbp in jobs.search if needed.
+        """)]
+    public IngestJobsResponse IngestDiceJobs(
+        [Description("Jobs fetched from Dice plugin, mapped to DiceJobInput.")]
+        IReadOnlyCollection<DiceJobInput> jobs,
+        [Description("When true (default), clears previously ingested Dice jobs first.")]
+        bool clearFirst = true) =>
+        service.IngestDiceJobs(new(jobs, clearFirst));
+
+    [McpServerTool(Name = "jobs.ingest_ziprecruiter", Destructive = false, ReadOnly = false)]
+    [Description("""
+        Ingest jobs fetched from the ZipRecruiter MCP plugin into the local search pipeline.
+
+        Workflow:
+          1. Call the ZipRecruiter MCP plugin's search_jobs tool with your query and location.
+          2. For each result: extract jid= from job_redirect_url → JobId,
+             salary.min_annual / salary.max_annual → SalaryMinUsd / SalaryMaxUsd,
+             is_remote → WorkMode (Remote=0 / Hybrid=1 / Office=2).
+          3. Call this tool (ClearFirst=true to replace previous batch).
+          4. Call jobs.search with sources=["ZipRecruiter"] or omit to include all sources.
+
+        Note: ZipRecruiter is US/Canada only. Salaries are in USD.
+        """)]
+    public IngestJobsResponse IngestZipRecruiterJobs(
+        [Description("Jobs fetched from ZipRecruiter plugin, mapped to ZipRecruiterJobInput.")]
+        IReadOnlyCollection<ZipRecruiterJobInput> jobs,
+        [Description("When true (default), clears previously ingested ZipRecruiter jobs first.")]
+        bool clearFirst = true) =>
+        service.IngestZipRecruiterJobs(new(jobs, clearFirst));
 }

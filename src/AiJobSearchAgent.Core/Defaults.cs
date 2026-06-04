@@ -11,17 +11,23 @@ public static class Defaults
         var minRate = decimal.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP"), out var d) ? d : 400m;
         var minMonths = int.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_CONTRACT_MONTHS"), out var m) ? m : 6;
 
+        var defaultTitles = new[]
+        {
+            "Senior Software Engineer",
+            "Senior Fullstack Engineer",
+            "Senior Software Developer",
+            "Lead Developer",
+            "Lead Software Engineer",
+            "Principal Engineer",
+            "Principal Developer"
+        };
+        var designationEnv = Environment.GetEnvironmentVariable("JOB_SEARCH_DESIRED_DESIGNATION");
+        var titles = !string.IsNullOrWhiteSpace(designationEnv)
+            ? designationEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : defaultTitles;
+
         return new(
-            Titles:
-            [
-                "Senior Software Engineer",
-                "Senior Fullstack Engineer",
-                "Senior Software Developer",
-                "Lead Developer",
-                "Lead Software Engineer",
-                "Principal Engineer",
-                "Principal Developer"
-            ],
+            Titles: titles,
             Postcode: postcode,
             RadiusMiles: radius,
             PostedFrom: today.AddDays(-postedWithin),
@@ -33,29 +39,25 @@ public static class Defaults
             MinimumContractMonths: minMonths);
     }
 
-    public static CvProfile CreateCvProfile() =>
-        new(
+    public static CvProfile CreateCvProfile()
+    {
+        var defaultSkills = new[]
+        {
+            "c#", "asp.net core", "web api", "react", "typescript", "javascript",
+            "php", "aws", "docker", "sql server", "postgresql", "mysql", "mongodb",
+            "microservices", "cqrs", "rest"
+        };
+        var skillsEnv = Environment.GetEnvironmentVariable("JOB_SEARCH_SKILLS");
+        var coreSkills = !string.IsNullOrWhiteSpace(skillsEnv)
+            ? skillsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                       .Select(s => s.ToLowerInvariant())
+                       .ToArray()
+            : defaultSkills;
+
+        return new(
             Name: "Ekanatha Reddy Urivakili",
             LocationPostcode: Environment.GetEnvironmentVariable("JOB_SEARCH_POSTCODE") ?? "MK4 4QG",
-            CoreSkills:
-            [
-                "c#",
-                "asp.net core",
-                "web api",
-                "react",
-                "typescript",
-                "javascript",
-                "php",
-                "aws",
-                "docker",
-                "sql server",
-                "postgresql",
-                "mysql",
-                "mongodb",
-                "microservices",
-                "cqrs",
-                "rest"
-            ],
+            CoreSkills: coreSkills,
             DomainKeywords:
             [
                 "fintech",
@@ -79,6 +81,7 @@ public static class Defaults
                 "scrum",
                 "code review"
             ]);
+    }
 
     public static IReadOnlyCollection<SourcePolicy> CreateSourcePolicies() =>
     [

@@ -21,6 +21,8 @@ public sealed class SettingsRepository
             ["JOB_SEARCH_MIN_PERMANENT_SALARY_GBP"] = "75000",
             ["JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP"] = "400",
             ["JOB_SEARCH_MIN_CONTRACT_MONTHS"] = "6",
+            ["JOB_SEARCH_DESIRED_DESIGNATION"] = "Senior Software Engineer,Lead Developer,Principal Engineer,Senior Fullstack Engineer,Senior Software Developer,Lead Software Engineer,Principal Developer",
+            ["JOB_SEARCH_SKILLS"] = "c#,asp.net core,web api,react,typescript,javascript,php,aws,docker,sql server,postgresql,mysql,mongodb,microservices,cqrs,rest",
             ["REED_API_KEY"] = string.Empty,
         };
 
@@ -32,6 +34,8 @@ public sealed class SettingsRepository
             "GMAIL_USER_EMAIL",
             "GMAIL_SEARCH_QUERY",
             "INDEED_GMAIL_SEARCH_QUERY",
+            "JOB_SEARCH_DESIRED_DESIGNATION",
+            "JOB_SEARCH_SKILLS",
         };
 
     // Keys whose values are encrypted at rest in the database.

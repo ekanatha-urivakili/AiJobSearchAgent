@@ -700,6 +700,32 @@ function SettingsPage(): ReactElement {
 
         <form onSubmit={handleSave}>
           <div className="settings-section">
+            <div className="settings-section-title">Job Profile</div>
+            <div className="settings-body">
+              <div className="form-field">
+                <label>Desired Designations</label>
+                <textarea
+                  rows={3}
+                  placeholder="Senior Software Engineer, Lead Developer, Principal Engineer"
+                  value={config["JOB_SEARCH_DESIRED_DESIGNATION"] ?? ""}
+                  onChange={set("JOB_SEARCH_DESIRED_DESIGNATION")}
+                />
+                <span className="field-hint">Comma-separated job titles used as search keywords.</span>
+              </div>
+              <div className="form-field">
+                <label>Skills</label>
+                <textarea
+                  rows={3}
+                  placeholder="C#, ASP.NET Core, React, TypeScript, AWS, Docker"
+                  value={config["JOB_SEARCH_SKILLS"] ?? ""}
+                  onChange={set("JOB_SEARCH_SKILLS")}
+                />
+                <span className="field-hint">Comma-separated skills used to score CV match against job listings.</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="settings-section">
             <div className="settings-section-title">Search Criteria</div>
             <div className="settings-grid">
               {SEARCH_SETTINGS.map(field => (

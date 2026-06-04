@@ -959,6 +959,10 @@ body {
   color: var(--green);
   font-size: .78rem;
 }
+.field-hint {
+  color: var(--text-dim);
+  font-size: .78rem;
+}
 
 .cv-file-list {
   border: 1px solid var(--border);

@@ -74,11 +74,14 @@ static async Task RunHttpAsync(string[] args)
         return Results.Ok(response);
     });
 
-    app.MapPost("/api/jobs/ingest_indeed", async (IngestIndeedJobsRequest request, JobSearchMcpService service, CancellationToken ct) =>
-    {
-        var response = service.IngestIndeedJobs(request);
-        return Results.Ok(response);
-    });
+    app.MapPost("/api/jobs/ingest_indeed", (IngestIndeedJobsRequest request, JobSearchMcpService service) =>
+        Results.Ok(service.IngestIndeedJobs(request)));
+
+    app.MapPost("/api/jobs/ingest_dice", (IngestDiceJobsRequest request, JobSearchMcpService service) =>
+        Results.Ok(service.IngestDiceJobs(request)));
+
+    app.MapPost("/api/jobs/ingest_ziprecruiter", (IngestZipRecruiterJobsRequest request, JobSearchMcpService service) =>
+        Results.Ok(service.IngestZipRecruiterJobs(request)));
 
     app.MapGet("/api/jobs/{source}/{sourceJobId}", async (string source, string sourceJobId, JobSearchMcpService service, CancellationToken ct) =>
     {

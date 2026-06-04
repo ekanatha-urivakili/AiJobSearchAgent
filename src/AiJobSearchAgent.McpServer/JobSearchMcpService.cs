@@ -12,6 +12,8 @@ public sealed class JobSearchMcpService
     private volatile ConcurrentDictionary<string, JobPosting> cache = new(StringComparer.OrdinalIgnoreCase);
     private volatile ConcurrentDictionary<string, SourceStatusDto> lastStatus = new(StringComparer.OrdinalIgnoreCase);
     private readonly IndeedDirectJobSourceAdapter indeedDirect = new();
+    private readonly AiJobSearchAgent.Core.PluginJobSourceAdapter diceAdapter = new("Dice");
+    private readonly AiJobSearchAgent.Core.PluginJobSourceAdapter zipRecruiterAdapter = new("ZipRecruiter");
 
     private sealed record RunState(SearchRunResult Result, JobSearchCriteria Criteria, string RunId, string Report);
     private volatile RunState? latest;
@@ -117,6 +119,8 @@ public sealed class JobSearchMcpService
                 var s when s.Equals("Gmail Alerts", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
                 var s when s.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
                 var s when s.Equals("Indeed Direct", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_indeed before jobs.search",
+                var s when s.Equals("Dice", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_dice before jobs.search",
+                var s when s.Equals("ZipRecruiter", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_ziprecruiter before jobs.search",
                 _ => null
             };
             var ready = policy.Enabled
@@ -135,6 +139,65 @@ public sealed class JobSearchMcpService
         }).ToArray();
 
         return new(sources);
+    }
+
+    public IngestJobsResponse IngestDiceJobs(IngestDiceJobsRequest request)
+    {
+        if (request.ClearFirst) diceAdapter.Clear();
+
+        var today = DateOnly.FromDateTime(timeProvider.GetLocalNow().DateTime);
+        var jobs = request.Jobs.Select(j =>
+        {
+            var (salMin, salMax) = ParseDiceSalary(j.SalaryRaw);
+            return new AiJobSearchAgent.Core.JobPosting(
+                "Dice", j.JobId,
+                Uri.TryCreate(j.Url, UriKind.Absolute, out var u) ? u : new Uri($"https://www.dice.com/job-detail/{j.JobId}"),
+                j.Title, j.Company, j.Location, 0,
+                j.EmploymentType, j.WorkMode,
+                j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Permanent ? salMin : null,
+                j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Permanent ? salMax : null,
+                j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Contract ? salMin : null,
+                j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Contract ? salMax : null,
+                null, today, j.Description ?? string.Empty);
+        });
+        diceAdapter.Ingest(jobs);
+        return new(request.Jobs.Count, diceAdapter.Count, $"Ingested {request.Jobs.Count} Dice jobs ({diceAdapter.Count} total buffered).");
+    }
+
+    public IngestJobsResponse IngestZipRecruiterJobs(IngestZipRecruiterJobsRequest request)
+    {
+        if (request.ClearFirst) zipRecruiterAdapter.Clear();
+
+        var today = DateOnly.FromDateTime(timeProvider.GetLocalNow().DateTime);
+        var jobs = request.Jobs.Select(j => new AiJobSearchAgent.Core.JobPosting(
+            "ZipRecruiter", j.JobId,
+            Uri.TryCreate(j.Url, UriKind.Absolute, out var u) ? u : new Uri($"https://www.ziprecruiter.com"),
+            j.Title, j.Company, j.Location, 0,
+            j.EmploymentType, j.WorkMode,
+            j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Permanent ? j.SalaryMinUsd : null,
+            j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Permanent ? j.SalaryMaxUsd : null,
+            j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Contract ? j.SalaryMinUsd : null,
+            j.EmploymentType == AiJobSearchAgent.Core.EmploymentType.Contract ? j.SalaryMaxUsd : null,
+            null, today, j.Description ?? string.Empty));
+        zipRecruiterAdapter.Ingest(jobs);
+        return new(request.Jobs.Count, zipRecruiterAdapter.Count, $"Ingested {request.Jobs.Count} ZipRecruiter jobs ({zipRecruiterAdapter.Count} total buffered).");
+    }
+
+    /// <summary>Parses Dice salary strings like "USD 170,000.00 - 270,000.00 per year" into (min, max).</summary>
+    private static (decimal? min, decimal? max) ParseDiceSalary(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return (null, null);
+        var numbers = System.Text.RegularExpressions.Regex.Matches(raw, @"[\d,]+\.?\d*")
+            .Select(m => decimal.TryParse(m.Value.Replace(",", ""), out var v) ? v : (decimal?)null)
+            .Where(v => v.HasValue && v.Value > 1000)
+            .Select(v => v!.Value)
+            .ToArray();
+        return numbers.Length switch
+        {
+            0 => (null, null),
+            1 => (numbers[0], null),
+            _ => (numbers[0], numbers[1])
+        };
     }
 
     /// <summary>Returns the cached result from the last run, or runs a fresh default search if none exists.</summary>
@@ -206,7 +269,9 @@ public sealed class JobSearchMcpService
         new("Reed", FetchMode.ApprovedApi, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY")), TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
         new("Gmail Alerts", FetchMode.AlertInbox, Enabled: HasGmailConfiguration(), TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 3)),
         new("Indeed UK", FetchMode.AlertInbox, Enabled: HasGmailConfiguration(), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
-        new("Indeed Direct", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4))
+        new("Indeed Direct", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4)),
+        new("Dice", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4)),
+        new("ZipRecruiter", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4))
     ];
 
     private IEnumerable<IJobSourceAdapter> CreateAdapters(JobSearchCriteria criteria, IReadOnlySet<string> selectedSources)
@@ -230,9 +295,13 @@ public sealed class JobSearchMcpService
         }
 
         if (selectedSources.Contains("Indeed Direct"))
-        {
             yield return indeedDirect;
-        }
+
+        if (selectedSources.Contains("Dice"))
+            yield return diceAdapter;
+
+        if (selectedSources.Contains("ZipRecruiter"))
+            yield return zipRecruiterAdapter;
 
         if (selectedSources.Contains("Indeed UK") || selectedSources.Contains("Indeed"))
         {
@@ -260,9 +329,13 @@ public sealed class JobSearchMcpService
         }
 
         if (sourceName.Equals("Indeed Direct", StringComparison.OrdinalIgnoreCase))
-        {
             return indeedDirect.Count > 0;
-        }
+
+        if (sourceName.Equals("Dice", StringComparison.OrdinalIgnoreCase))
+            return diceAdapter.Count > 0;
+
+        if (sourceName.Equals("ZipRecruiter", StringComparison.OrdinalIgnoreCase))
+            return zipRecruiterAdapter.Count > 0;
 
         return true;
     }

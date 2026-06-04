@@ -2,6 +2,104 @@
 
 Automated job search agent for senior UK software roles matched against Ekanatha Reddy Urivakili's CV profile.
 
+## How It Works — Step by Step
+
+This is what happens from first run to seeing matched jobs in your dashboard:
+
+### Step 1 — Configure your profile and credentials
+
+Open the **Settings** page in the dashboard (`http://localhost:5173/settings`) and fill in:
+
+1. **Job Profile** — your desired designations (e.g. `Senior Software Engineer, Lead Developer`) and the skills you want matched against job listings (e.g. `C#, React, AWS`). These are saved as `JOB_SEARCH_DESIRED_DESIGNATION` and `JOB_SEARCH_SKILLS`.
+2. **Search Criteria** — postcode, radius, posting age, salary/day-rate floors, contract minimums.
+3. **Reed API Key** — enables live job fetching from Reed.co.uk.
+4. **Gmail Integration** — service account JSON + mailbox email, so the agent can read job alert emails.
+5. **Slack Webhook** — optional; posts top matches (score ≥ 85) to a channel.
+
+Saved values are persisted to PostgreSQL (secrets encrypted with AES-256-GCM) and immediately applied as environment variables in the running server process.
+
+### Step 2 — The server loads settings on startup
+
+When `AiJobSearchAgent.McpServer --http` starts:
+
+1. Connects to PostgreSQL and ensures the `app_settings` table exists.
+2. Reads all stored settings and calls `Environment.SetEnvironmentVariable` for each key — so `Defaults.CreateCriteria()` and `Defaults.CreateCvProfile()` pick up your saved profile without a restart.
+3. Starts the HTTP API on `localhost:5001` (and CORS-allows the Vite dev server).
+
+### Step 3 — A search run is triggered
+
+A search run can be triggered three ways:
+
+| Trigger | How |
+|---|---|
+| Dashboard load | `GET /api/jobs/results` — returns cached run if one exists, otherwise runs a fresh default search |
+| Manual refresh | `GET /api/jobs/search` — always runs a fresh search and caches the result |
+| Daily worker | `AiJobSearchAgent.Worker --schedule` fires at the configured time (default `10:00 Europe/London`) |
+
+### Step 4 — Jobs are fetched from all enabled sources
+
+`JobSearchOrchestrator.RunAsync` calls each enabled source adapter in parallel:
+
+| Source | How it fetches | What enables it |
+|---|---|---|
+| **Reed** | Reed Job Search API (`/api/1.0/search`) | `REED_API_KEY` configured |
+| **Gmail Alerts** | Reads unread emails via Google service account | `GMAIL_CREDENTIALS_JSON` + `GMAIL_USER_EMAIL` |
+| **Indeed UK** | Same Gmail mailbox, Indeed alert email format | `GMAIL_CREDENTIALS_JSON` + `GMAIL_USER_EMAIL` |
+| **Indeed Direct** | In-memory buffer filled by `POST /api/jobs/ingest_indeed` | Buffer non-empty |
+| **Dice / ZipRecruiter** | In-memory buffers via MCP tool calls | Buffer non-empty |
+
+`SourcePolicyGuard` rate-limits and can disable sources by policy. Disabled or misconfigured sources return a `PolicyBlocked` status but do not fail the run.
+
+### Step 5 — Each job is filtered
+
+`JobFilterEngine` checks each posting against your settings in this order:
+
+1. **Posted date** — must be within `JOB_SEARCH_POSTED_WITHIN_DAYS` (default 7).
+2. **Distance** — must be within `JOB_SEARCH_RADIUS_MILES` of `JOB_SEARCH_POSTCODE` (remote jobs bypass this).
+3. **Title match** — title must contain one of the configured designations from `JOB_SEARCH_DESIRED_DESIGNATION`.
+4. **Salary / day rate** — permanent roles at or above `JOB_SEARCH_MIN_PERMANENT_SALARY_GBP`; contract roles at or above `JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP` and `JOB_SEARCH_MIN_CONTRACT_MONTHS`. Roles without published pay are passed through.
+
+Jobs failing any check are counted in the **Rejection Summary** visible on the dashboard.
+
+### Step 6 — Passing jobs are scored against your CV
+
+`CvMatchScorer` calculates a 0–100 score per job using keyword signals from your profile:
+
+| Signal group | Source | Weight |
+|---|---|---|
+| Core skills | `JOB_SEARCH_SKILLS` | High |
+| Domain keywords | Hardcoded (fintech, payments, e-commerce, …) | Medium |
+| Leadership keywords | Hardcoded (lead, senior, mentor, …) | Medium |
+
+Matching keywords become the **"Why it matches"** reasons shown on the job detail page. Missing keywords of note become **"Risks to review"**.
+
+Scoring thresholds:
+
+- **≥ 85** → Recommended + Slack alert
+- **≥ 70** → Good match (shown in dashboard)
+- **< 70** → Rejected (counted in summary)
+
+### Step 7 — Results are deduplicated and cached
+
+Jobs are deduplicated by `(source, sourceJobId)` to prevent the same posting appearing from multiple sources. The final `SearchRunResult` is stored in memory in `JobSearchMcpService` and served instantly on subsequent `GET /api/jobs/results` calls until the next search run.
+
+### Step 8 — Reports and alerts are sent
+
+After scoring:
+
+- **Markdown report** — written to `reports/daily-job-matches-YYYY-MM-DD.md`.
+- **Slack alert** — each recommended job (score ≥ 85) is posted to the configured webhook with title, company, score, compensation, and a direct link.
+
+### Step 9 — Browse and act
+
+The React dashboard at `http://localhost:5173` shows:
+
+- **Dashboard** — top picks, source status, rejection summary.
+- **Browse Jobs** — filter by work mode, employment type, location, salary, and quality. Sort by score, date, or salary.
+- **Job Detail** — full description, CV match reasons, risks, and a direct link to the original advert.
+
+---
+
 ## What is built
 
 - `.NET 10` worker with daily scheduler (Europe/London timezone)
@@ -213,6 +311,8 @@ sequenceDiagram
 
 | Setting | Default | Env var |
 |---|---|---|
+| Desired designations | `Senior Software Engineer, Lead Developer, …` | `JOB_SEARCH_DESIRED_DESIGNATION` |
+| Skills | `c#, asp.net core, react, typescript, aws, …` | `JOB_SEARCH_SKILLS` |
 | Postcode | `MK4 4QG` | `JOB_SEARCH_POSTCODE` |
 | Radius | 50 miles | `JOB_SEARCH_RADIUS_MILES` |
 | Posted within | 7 days | `JOB_SEARCH_POSTED_WITHIN_DAYS` |
@@ -224,7 +324,7 @@ sequenceDiagram
 | Gmail mailbox user | _(none)_ | `GMAIL_USER_EMAIL` |
 | Indeed alert query | `from:jobalerts-noreply@indeed.com is:unread` | `INDEED_GMAIL_SEARCH_QUERY` |
 
-Target titles: Senior Software Engineer, Senior Fullstack Engineer, Senior Software Developer, Lead Developer, Lead Software Engineer, Principal Engineer, Principal Developer.
+`JOB_SEARCH_DESIRED_DESIGNATION` and `JOB_SEARCH_SKILLS` are configurable from the **Job Profile** section of the Settings page. Both accept comma-separated values and fall back to built-in defaults when not set.
 
 ## Configuration
 
@@ -458,6 +558,8 @@ JOB_SEARCH_POSTED_WITHIN_DAYS=7
 JOB_SEARCH_MIN_PERMANENT_SALARY_GBP=75000
 JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP=400
 JOB_SEARCH_MIN_CONTRACT_MONTHS=6
+JOB_SEARCH_DESIRED_DESIGNATION=Senior Software Engineer,Lead Developer,Principal Engineer
+JOB_SEARCH_SKILLS=c#,asp.net core,react,typescript,aws,docker
 REED_API_KEY=<redacted>
 SLACK_WEBHOOK_URL=<redacted>
 GMAIL_CREDENTIALS_JSON=<redacted>
