@@ -137,7 +137,7 @@ Policy:
 
 **Priority:** Phase 2 — ✅ implemented 2026-06-03 via `AlertInbox` (Gmail alert email ingestion).
 
-`IndeedAlertJobSourceAdapter` reads Indeed job alert emails from the Gmail inbox using the shared `GMAIL_CREDENTIALS_JSON` service account. The adapter:
+`IndeedAlertJobSourceAdapter` reads Indeed job alert emails from the Gmail inbox using the shared `GMAIL_CREDENTIALS_JSON` service account delegated to `GMAIL_USER_EMAIL`. The adapter:
 
 1. Queries Gmail with `INDEED_GMAIL_SEARCH_QUERY` (default: `from:jobalerts-noreply@indeed.com is:unread`).
 2. Parses each email's HTML body using HtmlAgilityPack.
@@ -149,7 +149,7 @@ Policy:
 Implementation notes:
 
 - `IndeedAlertJobSourceAdapter` lives in `AiJobSearchAgent.Core/Sources.cs` alongside `GmailAlertJobSourceAdapter`.
-- `JobSearchMcpService.CreatePolicies()` enables Indeed UK automatically when `GMAIL_CREDENTIALS_JSON` is set.
+- `JobSearchMcpService.CreatePolicies()` enables Indeed UK automatically when `GMAIL_CREDENTIALS_JSON` and `GMAIL_USER_EMAIL` are set.
 - `INDEED_GMAIL_SEARCH_QUERY` overrides the default Gmail filter.
 - `ParseFixture` static helper allows unit testing without Gmail credentials.
 
@@ -161,7 +161,7 @@ Policy (live):
   "fetchMode": "AlertInbox",
   "enabled": true,
   "minimumDelaySeconds": 10,
-  "requiredSecret": "GMAIL_CREDENTIALS_JSON",
+  "requiredSecret": "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
   "lastReviewedOn": "2026-06-03"
 }
 ```
@@ -495,7 +495,7 @@ Small supplementary diagrams were added above in the Authorization and Deduplica
 ## 16. Change log
 - 2026-06-03: Added DB-backed Settings screen and CV upload flow. Settings API now saves configurable values to PostgreSQL `app_settings`, encrypts secrets with `SETTINGS_ENCRYPTION_KEY`, masks secrets on read, and CV uploads save `.pdf`, `.docx`, and `.md` files under `CVs/` with replace-or-rename behavior.
 - 2026-06-03: Removed unsupported sources from runtime source registration, policy seeds, frontend-facing source output, docs, and diagrams.
-- 2026-06-03: Phase 2 Indeed `AlertInbox` integration implemented. Added `IndeedAlertJobSourceAdapter`, updated `JobSearchMcpService` policies/adapters/health, added `INDEED_GMAIL_SEARCH_QUERY` env var, added unit tests, updated README and this document.
+- 2026-06-03: Phase 2 Indeed `AlertInbox` integration implemented. Added `IndeedAlertJobSourceAdapter`, updated `JobSearchMcpService` policies/adapters/health, added `GMAIL_USER_EMAIL` and `INDEED_GMAIL_SEARCH_QUERY` env vars, added unit tests, updated README and this document.
 
 - 2026-06-01: Appended Operational Appendix with transport, auth, secrets, rate-limiting, deduplication, DB sketch, testing, observability, privacy, legal checklist, CLI helpers, and next steps.
 - 2026-06-01: Review pass — added alert-source dependency note to `jobs.import_alert_email` (§4.2); `url` field provenance caveat (§8.2); STDIO DevMode bypass requirement (§14.2); phase 1 `.env` guidance (§14.3); dedupe TTL and unique-constraint consistency decision (§14.5); `runs` table indexes and `source_fetches.warnings` schema contract (§14.6); phase 1 gate on open questions Q1/Q2 (§10); MCP spec URL staleness flag (§13).

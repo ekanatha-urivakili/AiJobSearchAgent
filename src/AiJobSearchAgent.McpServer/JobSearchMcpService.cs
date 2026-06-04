@@ -11,6 +11,7 @@ public sealed class JobSearchMcpService
 
     private volatile ConcurrentDictionary<string, JobPosting> cache = new(StringComparer.OrdinalIgnoreCase);
     private volatile ConcurrentDictionary<string, SourceStatusDto> lastStatus = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IndeedDirectJobSourceAdapter indeedDirect = new();
 
     private sealed record RunState(SearchRunResult Result, JobSearchCriteria Criteria, string RunId, string Report);
     private volatile RunState? latest;
@@ -113,12 +114,14 @@ public sealed class JobSearchMcpService
             var requiredSecret = policy.SourceName switch
             {
                 var s when s.Equals("Reed", StringComparison.OrdinalIgnoreCase) => "REED_API_KEY",
-                var s when s.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON",
+                var s when s.Equals("Gmail Alerts", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
+                var s when s.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
+                var s when s.Equals("Indeed Direct", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_indeed before jobs.search",
                 _ => null
             };
             var ready = policy.Enabled
                 && policy.FetchMode != FetchMode.Disabled
-                && (requiredSecret is null || !string.IsNullOrWhiteSpace(credentials.GetSecret(requiredSecret)));
+                && SourceHasRequiredConfiguration(policy.SourceName);
 
             lastStatus.TryGetValue(policy.SourceName, out var status);
             return new SourceHealthDto(
@@ -132,6 +135,51 @@ public sealed class JobSearchMcpService
         }).ToArray();
 
         return new(sources);
+    }
+
+    /// <summary>Returns the cached result from the last run, or runs a fresh default search if none exists.</summary>
+    public Task<SearchJobsResponse> GetLatestOrSearchAsync(SearchJobsRequest request, CancellationToken cancellationToken)
+    {
+        if (latest is not null)
+        {
+            var cached = latest;
+            var sourceStatus = BuildSourceStatus(CreatePolicies(), cached.Result).ToArray();
+            return Task.FromResult(new SearchJobsResponse(
+                cached.RunId,
+                $"jobsearch://reports/{cached.Criteria.PostedTo:yyyy-MM-dd}",
+                sourceStatus,
+                cached.Result.Matches.Select(ToMatchDto).ToArray(),
+                cached.Result.RejectedSummary));
+        }
+        return SearchJobsAsync(request, cancellationToken);
+    }
+
+    public IngestIndeedJobsResponse IngestIndeedJobs(IngestIndeedJobsRequest request)
+    {
+        if (request.ClearFirst)
+            indeedDirect.Clear();
+
+        var today = DateOnly.FromDateTime(timeProvider.GetLocalNow().DateTime);
+        var jobs = request.Jobs.Select(j => new JobPosting(
+            "Indeed Direct",
+            j.JobId,
+            Uri.TryCreate(j.Url, UriKind.Absolute, out var uri) ? uri : new Uri($"https://uk.indeed.com/viewjob?jk={j.JobId}"),
+            j.Title,
+            j.Company,
+            j.Location,
+            0,
+            j.EmploymentType,
+            j.WorkMode,
+            j.EmploymentType == EmploymentType.Permanent ? j.SalaryMin : null,
+            j.EmploymentType == EmploymentType.Permanent ? j.SalaryMax : null,
+            j.EmploymentType == EmploymentType.Contract ? j.DayRateMin : null,
+            j.EmploymentType == EmploymentType.Contract ? j.DayRateMax : null,
+            j.ContractMonths,
+            today,
+            j.Description ?? string.Empty));
+
+        indeedDirect.Ingest(jobs);
+        return new(request.Jobs.Count, indeedDirect.Count, $"Ingested {request.Jobs.Count} Indeed Direct jobs ({indeedDirect.Count} total buffered).");
     }
 
     private static JobSearchCriteria CreateCriteria(SearchJobsRequest request, DateOnly today)
@@ -156,8 +204,9 @@ public sealed class JobSearchMcpService
     private IReadOnlyCollection<SourcePolicy> CreatePolicies() =>
     [
         new("Reed", FetchMode.ApprovedApi, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY")), TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
-        new("Gmail Alerts", FetchMode.AlertInbox, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON")), TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 3)),
-        new("Indeed UK", FetchMode.AlertInbox, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON")), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3))
+        new("Gmail Alerts", FetchMode.AlertInbox, Enabled: HasGmailConfiguration(), TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 3)),
+        new("Indeed UK", FetchMode.AlertInbox, Enabled: HasGmailConfiguration(), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
+        new("Indeed Direct", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4))
     ];
 
     private IEnumerable<IJobSourceAdapter> CreateAdapters(JobSearchCriteria criteria, IReadOnlySet<string> selectedSources)
@@ -173,22 +222,54 @@ public sealed class JobSearchMcpService
         if (selectedSources.Contains("Gmail Alerts"))
         {
             var credJson = credentials.GetSecret("GMAIL_CREDENTIALS_JSON");
+            var userEmail = credentials.GetSecret("GMAIL_USER_EMAIL");
             var gmailQuery = credentials.GetSecret("GMAIL_SEARCH_QUERY") ?? "label:job-alerts is:unread";
-            yield return string.IsNullOrWhiteSpace(credJson)
-                ? new PolicyBlockedSourceAdapter("Gmail Alerts", "GMAIL_CREDENTIALS_JSON is not configured.")
-                : new GmailAlertJobSourceAdapter(credJson, gmailQuery);
+            yield return !HasGmailConfiguration()
+                ? new PolicyBlockedSourceAdapter("Gmail Alerts", "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL are required.")
+                : new GmailAlertJobSourceAdapter(credJson, gmailQuery, userEmail);
+        }
+
+        if (selectedSources.Contains("Indeed Direct"))
+        {
+            yield return indeedDirect;
         }
 
         if (selectedSources.Contains("Indeed UK") || selectedSources.Contains("Indeed"))
         {
             var credJson = credentials.GetSecret("GMAIL_CREDENTIALS_JSON");
+            var userEmail = credentials.GetSecret("GMAIL_USER_EMAIL");
             var indeedQuery = credentials.GetSecret("INDEED_GMAIL_SEARCH_QUERY")
                 ?? "from:jobalerts-noreply@indeed.com is:unread";
-            yield return string.IsNullOrWhiteSpace(credJson)
-                ? new PolicyBlockedSourceAdapter("Indeed UK", "GMAIL_CREDENTIALS_JSON is not configured.")
-                : new IndeedAlertJobSourceAdapter(credJson, indeedQuery);
+            yield return !HasGmailConfiguration()
+                ? new PolicyBlockedSourceAdapter("Indeed UK", "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL are required.")
+                : new IndeedAlertJobSourceAdapter(credJson, indeedQuery, userEmail);
         }
     }
+
+    private bool SourceHasRequiredConfiguration(string sourceName)
+    {
+        if (sourceName.Equals("Reed", StringComparison.OrdinalIgnoreCase))
+        {
+            return !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY"));
+        }
+
+        if (sourceName.Equals("Gmail Alerts", StringComparison.OrdinalIgnoreCase)
+            || sourceName.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase))
+        {
+            return HasGmailConfiguration();
+        }
+
+        if (sourceName.Equals("Indeed Direct", StringComparison.OrdinalIgnoreCase))
+        {
+            return indeedDirect.Count > 0;
+        }
+
+        return true;
+    }
+
+    private bool HasGmailConfiguration() =>
+        !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_CREDENTIALS_JSON"))
+        && !string.IsNullOrWhiteSpace(credentials.GetSecret("GMAIL_USER_EMAIL"));
 
     private static IEnumerable<SourceStatusDto> BuildSourceStatus(
         IReadOnlyCollection<SourcePolicy> policies,

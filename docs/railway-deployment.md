@@ -29,6 +29,7 @@ JOB_SEARCH_MIN_CONTRACT_MONTHS=6
 REED_API_KEY=<redacted>
 SLACK_WEBHOOK_URL=<redacted>
 GMAIL_CREDENTIALS_JSON=<redacted>
+GMAIL_USER_EMAIL=you@your-domain.com
 GMAIL_SEARCH_QUERY=label:job-alerts is:unread
 INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 ```
@@ -40,6 +41,8 @@ openssl rand -base64 32
 ```
 
 Keep the value stable. Changing it prevents decrypting any previously saved secret values in `app_settings`.
+
+For Gmail/Indeed alerts, `GMAIL_USER_EMAIL` must be the mailbox that receives job alerts. Service-account Gmail access also requires Google Workspace domain-wide delegation for the Gmail readonly scope.
 
 ## Database Schema
 

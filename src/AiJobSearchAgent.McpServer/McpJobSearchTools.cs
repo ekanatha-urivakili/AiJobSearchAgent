@@ -58,4 +58,25 @@ public sealed class McpJobSearchTools
     [McpServerTool(Name = "sources.health", Destructive = false, ReadOnly = true)]
     [Description("Return source policy, configured mode, secret readiness, and last local fetch status.")]
     public SourceHealthResponse SourceHealth() => service.SourceHealth();
+
+    [McpServerTool(Name = "jobs.ingest_indeed", Destructive = false, ReadOnly = false)]
+    [Description("""
+        Ingest jobs fetched from the Indeed MCP plugin into the local search pipeline.
+
+        Workflow:
+          1. Call the Indeed MCP plugin's search_jobs tool with your desired keywords and location.
+          2. Map each result to IndeedJobInput — set EmploymentType (Permanent/Contract) and WorkMode
+             (Remote/Hybrid/Office) based on the job description; parse salary/day-rate from the
+             salary string if provided.
+          3. Call this tool with the mapped jobs (ClearFirst=true to replace any previous batch).
+          4. Call jobs.search with sources=["Indeed Direct"] (or omit sources to include all).
+
+        The injected jobs flow through the standard filter/score pipeline exactly like Reed results.
+        """)]
+    public IngestIndeedJobsResponse IngestIndeedJobs(
+        [Description("Jobs fetched from the Indeed plugin, mapped to the IndeedJobInput shape.")]
+        IReadOnlyCollection<IndeedJobInput> jobs,
+        [Description("When true (default), clears previously ingested jobs before adding the new batch.")]
+        bool clearFirst = true) =>
+        service.IngestIndeedJobs(new(jobs, clearFirst));
 }

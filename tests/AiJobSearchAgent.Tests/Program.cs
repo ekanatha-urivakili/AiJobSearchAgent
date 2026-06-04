@@ -15,7 +15,9 @@ var tests = new (string Name, Action Test)[]
     ("CV scorer penalises jobs with few keyword matches", LowKeywordMatchIsNotRecommended),
     ("Slack reporter skips when URL is null", SlackReporterSkipsWhenUrlIsNull),
     ("Gmail adapter returns warning when credentials are null", GmailAdapterReturnsWarningWhenCredentialsAreNull),
+    ("Gmail adapter returns warning when user email is missing", GmailAdapterReturnsWarningWhenUserEmailIsMissing),
     ("Indeed adapter returns warning when credentials are null", IndeedAdapterReturnsWarningWhenCredentialsAreNull),
+    ("Indeed adapter returns warning when user email is missing", IndeedAdapterReturnsWarningWhenUserEmailIsMissing),
     ("Indeed adapter extracts job key from rc/clk URL", IndeedAdapterExtractsJobKeyFromRedirectUrl),
     ("Indeed adapter parses jobs from alert email HTML fixture", IndeedAdapterParsesJobsFromEmailFixture),
     ("Indeed adapter parses day-rate salary as contract", IndeedAdapterParsesDayRateSalaryAsContract),
@@ -238,6 +240,17 @@ static void GmailAdapterReturnsWarningWhenCredentialsAreNull()
     AssertTrue(result.Warnings.First().Contains("Gmail credentials not configured"));
 }
 
+static void GmailAdapterReturnsWarningWhenUserEmailIsMissing()
+{
+    var adapter = new GmailAlertJobSourceAdapter("{}", "label:job-alerts is:unread");
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 6, 3));
+    var result = adapter.FetchAsync(criteria, CancellationToken.None).Result;
+
+    AssertEqual(0, result.Jobs.Count);
+    AssertEqual(1, result.Warnings.Count);
+    AssertTrue(result.Warnings.First().Contains("GMAIL_USER_EMAIL is not configured"));
+}
+
 // ── Indeed adapter tests ─────────────────────────────────────────────────────
 
 static void IndeedAdapterReturnsWarningWhenCredentialsAreNull()
@@ -249,6 +262,17 @@ static void IndeedAdapterReturnsWarningWhenCredentialsAreNull()
     AssertEqual(0, result.Jobs.Count);
     AssertEqual(1, result.Warnings.Count);
     AssertTrue(result.Warnings.First().Contains("Indeed alert credentials not configured"));
+}
+
+static void IndeedAdapterReturnsWarningWhenUserEmailIsMissing()
+{
+    var adapter = new IndeedAlertJobSourceAdapter("{}", "from:jobalerts-noreply@indeed.com is:unread");
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 6, 3));
+    var result = adapter.FetchAsync(criteria, CancellationToken.None).Result;
+
+    AssertEqual(0, result.Jobs.Count);
+    AssertEqual(1, result.Warnings.Count);
+    AssertTrue(result.Warnings.First().Contains("GMAIL_USER_EMAIL is not configured"));
 }
 
 static void IndeedAdapterExtractsJobKeyFromRedirectUrl()

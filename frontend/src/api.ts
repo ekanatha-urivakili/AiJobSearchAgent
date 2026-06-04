@@ -72,7 +72,7 @@ export type FetchResult =
 
 export async function fetchMatches(): Promise<FetchResult> {
   try {
-    const res = await fetch(`${BASE_URL}/api/jobs/search`);
+    const res = await fetch(`${BASE_URL}/api/jobs/results`);
     if (!res.ok) return { status: "error", message: `API ${res.status} ${res.statusText}` };
     const data: JobMatchDto[] | SearchResponse = await res.json();
     // Handle both old array response and new SearchResponse shape

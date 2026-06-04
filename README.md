@@ -200,6 +200,7 @@ sequenceDiagram
 | Min contract duration | 6 months | `JOB_SEARCH_MIN_CONTRACT_MONTHS` |
 | Time zone | `Europe/London` | `JOB_SEARCH_TIME_ZONE` |
 | Run time | `10:00` | `JOB_SEARCH_RUN_AT` |
+| Gmail mailbox user | _(none)_ | `GMAIL_USER_EMAIL` |
 | Indeed alert query | `from:jobalerts-noreply@indeed.com is:unread` | `INDEED_GMAIL_SEARCH_QUERY` |
 
 Target titles: Senior Software Engineer, Senior Fullstack Engineer, Senior Software Developer, Lead Developer, Lead Software Engineer, Principal Engineer, Principal Developer.
@@ -246,12 +247,13 @@ The worker posts a message per run when any job scores ≥ 85. If the variable i
 
 ### Gmail Credentials JSON
 
-A Google **service account** credentials JSON file, pasted inline as a single value. The service account needs **Gmail API** access (`gmail.readonly` scope) granted to it.
+A Google **service account** credentials JSON file, pasted inline as a single value. The service account needs **Gmail API** access (`gmail.readonly` scope) and must be delegated to the mailbox configured in `GMAIL_USER_EMAIL`.
 
 1. Go to Google Cloud Console → **IAM & Admin → Service Accounts → Create Service Account**.
 2. Enable the **Gmail API** on the project.
 3. Under the service account, create a **JSON key** and download it.
-4. Grant the service account access to your Gmail (domain-wide delegation for Workspace, or direct sharing for personal accounts).
+4. For Google Workspace, enable domain-wide delegation for the service account and authorize the Gmail readonly scope in Admin Console.
+5. Set `GMAIL_USER_EMAIL` to the mailbox that receives job alerts.
 
 The JSON looks like:
 
@@ -272,9 +274,10 @@ Set it in `.env` as a single-line value (the UI settings panel handles the forma
 
 ```
 GMAIL_CREDENTIALS_JSON={"type":"service_account","project_id":"my-project-123",...}
+GMAIL_USER_EMAIL=you@your-domain.com
 ```
 
-If the variable is absent or blank, the Gmail source adapter returns an empty result with a warning — the rest of the run continues normally.
+If either `GMAIL_CREDENTIALS_JSON` or `GMAIL_USER_EMAIL` is absent or blank, the Gmail source adapter returns an empty result with a warning — the rest of the run continues normally.
 
 ### Gmail Search Query
 
@@ -304,7 +307,7 @@ Set `INDEED_GMAIL_SEARCH_QUERY` to target Indeed alert emails specifically:
 INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 ```
 
-The adapter extracts the stable Indeed job key (`jk` parameter) from each alert link and maps it to a canonical `https://uk.indeed.com/viewjob?jk=...` URL. Salary, location, employment type, and description are parsed from the email HTML. If `GMAIL_CREDENTIALS_JSON` is configured, Indeed is automatically enabled.
+The adapter extracts the stable Indeed job key (`jk` parameter) from each alert link and maps it to a canonical `https://uk.indeed.com/viewjob?jk=...` URL. Salary, location, employment type, and description are parsed from the email HTML. If `GMAIL_CREDENTIALS_JSON` and `GMAIL_USER_EMAIL` are configured, Indeed is automatically enabled.
 
 ### Settings Panel
 
@@ -429,6 +432,7 @@ JOB_SEARCH_MIN_CONTRACT_MONTHS=6
 REED_API_KEY=<redacted>
 SLACK_WEBHOOK_URL=<redacted>
 GMAIL_CREDENTIALS_JSON=<redacted>
+GMAIL_USER_EMAIL=you@your-domain.com
 GMAIL_SEARCH_QUERY=label:job-alerts is:unread
 INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 ```

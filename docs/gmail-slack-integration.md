@@ -15,6 +15,7 @@ Current variables:
 | Variable | Required | Notes |
 |---|---:|---|
 | `GMAIL_CREDENTIALS_JSON` | Yes, if Gmail/Indeed alert ingestion is enabled | Service-account JSON, pasted as one value. |
+| `GMAIL_USER_EMAIL` | Yes, if Gmail/Indeed alert ingestion is enabled | Delegated mailbox that receives job alerts. |
 | `GMAIL_SEARCH_QUERY` | No | Default Gmail alert search. |
 | `INDEED_GMAIL_SEARCH_QUERY` | No | Targets Indeed job alert emails. |
 | `SLACK_WEBHOOK_URL` | No | Posts high-score matches when configured. |
@@ -28,7 +29,7 @@ The submitted plan is directionally correct. The `IJobSourceAdapter` reuse for G
 
 | # | Decision | Recommendation | Risk if Deferred |
 |---|----------|----------------|-----------------|
-| D-1 | Gmail auth strategy | Implemented with `GMAIL_CREDENTIALS_JSON` service-account JSON. For personal Gmail, use an account/workspace setup that grants the service account the required read access. | Wrong auth strategy means complete rewrite of credential handling |
+| D-1 | Gmail auth strategy | Implemented with `GMAIL_CREDENTIALS_JSON` service-account JSON plus `GMAIL_USER_EMAIL` delegated mailbox. Workspace domain-wide delegation is required for service-account mailbox access. | Wrong auth strategy means complete rewrite of credential handling |
 | D-2 | Reporter invocation point | Reporters should be called from the **Worker** (`Program.cs`), not injected into `JobSearchOrchestrator`. Orchestrator's responsibility stops at `SearchRunResult`. | Violates single responsibility; Orchestrator becomes aware of I/O concerns |
 | D-3 | Per-provider email parser | Implement a `Dictionary<string, IEmailBodyParser>` keyed on sender domain. One parser per provider. **Not** a single monolithic parser. | Adding a second provider (Indeed, LinkedIn) requires touching existing parsing code |
 | D-4 | Cross-source deduplication | Gmail-parsed jobs need a deterministic `SourceJobId` derived from the job URL (e.g. `SHA256(url)[0..8]`). Otherwise the existing `Deduplicate()` in `JobSearchOrchestrator` won't catch overlap with API-sourced jobs from the same provider. | Duplicate jobs appear in output; user gets confused |
@@ -326,7 +327,7 @@ classDiagram
 
 ### 3.3 Gmail Authentication Flow
 
-The worker runs unattended. The implemented adapter reads `GMAIL_CREDENTIALS_JSON` and creates Google credentials from the configured service-account JSON.
+The worker runs unattended. The implemented adapter reads `GMAIL_CREDENTIALS_JSON`, delegates to `GMAIL_USER_EMAIL`, and creates Google credentials from the configured service-account JSON.
 
 ```mermaid
 sequenceDiagram
@@ -339,13 +340,14 @@ sequenceDiagram
     Dev->>GConsole: Create service account and JSON key
     GConsole-->>Dev: service-account JSON
     Dev->>EnvStore: Store GMAIL_CREDENTIALS_JSON
+    Dev->>EnvStore: Store GMAIL_USER_EMAIL
     Dev->>EnvStore: Store GMAIL_SEARCH_QUERY / INDEED_GMAIL_SEARCH_QUERY
 
     Worker->>EnvStore: Read service-account JSON
     Worker->>Gmail: Authenticate and query unread job alerts
     Gmail-->>Worker: Alert email messages
 
-    Note over Dev,EnvStore: Grant the service account the required Gmail read access before deployment.
+    Note over Dev,EnvStore: Grant domain-wide delegation for the Gmail readonly scope before deployment.
 ```
 
 **Runtime service-account authentication (per-run):**
@@ -357,7 +359,8 @@ sequenceDiagram
     participant Gmail as Gmail API
 
     GJSA->>GCP: Load GMAIL_CREDENTIALS_JSON
-    GCP->>Gmail: Authenticate service account
+    GJSA->>GCP: Use GMAIL_USER_EMAIL delegated mailbox
+    GCP->>Gmail: Authenticate service account as mailbox user
     Gmail-->>GJSA: Authorized Gmail service
 ```
 
@@ -469,6 +472,7 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 | Variable | Required | Example | Notes |
 |----------|----------|---------|-------|
 | `GMAIL_CREDENTIALS_JSON` | Yes (if Gmail enabled) | `{"type":"service_account",...}` | Google service-account JSON as one value |
+| `GMAIL_USER_EMAIL` | Yes (if Gmail enabled) | `you@your-domain.com` | Mailbox user delegated to the service account |
 | `GMAIL_SEARCH_QUERY` | No | `label:job-alerts is:unread` | Default shown; override to restrict scope |
 | `INDEED_GMAIL_SEARCH_QUERY` | No | `from:jobalerts-noreply@indeed.com is:unread` | Used by the Indeed alert adapter |
 | `SLACK_WEBHOOK_URL` | Yes (if Slack enabled) | `https://hooks.slack.com/services/T.../B.../xxx` | Incoming webhook URL from Slack app |
@@ -479,6 +483,7 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 ```
 # Gmail Integration (AlertInbox mode)
 # GMAIL_CREDENTIALS_JSON=
+# GMAIL_USER_EMAIL=you@your-domain.com
 # GMAIL_SEARCH_QUERY=label:job-alerts is:unread
 # INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 

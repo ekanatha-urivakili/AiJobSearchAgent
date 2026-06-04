@@ -817,6 +817,11 @@ function SettingsPage(): ReactElement {
                   value={config["GMAIL_CREDENTIALS_JSON"] ?? ""} onChange={set("GMAIL_CREDENTIALS_JSON")} />
               </div>
               <div className="form-field">
+                <label>Mailbox User Email</label>
+                <input placeholder="you@your-domain.com" value={config["GMAIL_USER_EMAIL"] ?? ""}
+                  onChange={set("GMAIL_USER_EMAIL")} />
+              </div>
+              <div className="form-field">
                 <label>Gmail Search Query</label>
                 <input placeholder="label:job-alerts is:unread" value={config["GMAIL_SEARCH_QUERY"] ?? ""}
                   onChange={set("GMAIL_SEARCH_QUERY")} />

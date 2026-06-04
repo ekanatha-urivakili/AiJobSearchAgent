@@ -29,6 +29,7 @@ public sealed class SettingsRepository
         {
             "SLACK_WEBHOOK_URL",
             "GMAIL_CREDENTIALS_JSON",
+            "GMAIL_USER_EMAIL",
             "GMAIL_SEARCH_QUERY",
             "INDEED_GMAIL_SEARCH_QUERY",
         };

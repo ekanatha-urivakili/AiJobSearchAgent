@@ -59,10 +59,24 @@ static async Task RunHttpAsync(string[] args)
     await settings.EnsureSchemaAsync();
     await ApplySettingsToEnvironmentAsync(settings, CancellationToken.None);
 
+    // Returns the cached result from the last search run without triggering a new one.
+    // The frontend calls this on load; /api/jobs/search is only called on explicit refresh.
+    app.MapGet("/api/jobs/results", async (JobSearchMcpService service, CancellationToken ct) =>
+    {
+        var response = await service.GetLatestOrSearchAsync(SearchJobsRequest.Default, ct);
+        return Results.Ok(response);
+    });
+
     app.MapGet("/api/jobs/search", async (JobSearchMcpService service, CancellationToken ct) =>
     {
         var response = await service.SearchJobsAsync(SearchJobsRequest.Default, ct);
         // Return full response so the dashboard can show source status and rejection summary
+        return Results.Ok(response);
+    });
+
+    app.MapPost("/api/jobs/ingest_indeed", async (IngestIndeedJobsRequest request, JobSearchMcpService service, CancellationToken ct) =>
+    {
+        var response = service.IngestIndeedJobs(request);
         return Results.Ok(response);
     });
 

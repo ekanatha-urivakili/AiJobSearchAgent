@@ -31,10 +31,16 @@ public sealed class JobFilterEngine
 
         if (job.EmploymentType == EmploymentType.Permanent)
         {
-            var bestSalary = Math.Max(job.SalaryMin ?? 0, job.SalaryMax ?? 0);
-            return bestSalary >= criteria.MinimumPermanentSalary.Amount
-                ? new(true, "Accepted")
-                : new(false, "Below salary threshold");
+            // Null salary means the source didn't publish it — let it through rather than
+            // incorrectly rejecting it as below-threshold (scored lower by CvMatchScorer).
+            var salaryKnown = job.SalaryMin.HasValue || job.SalaryMax.HasValue;
+            if (salaryKnown)
+            {
+                var bestSalary = Math.Max(job.SalaryMin ?? 0, job.SalaryMax ?? 0);
+                if (bestSalary < criteria.MinimumPermanentSalary.Amount)
+                    return new(false, "Below salary threshold");
+            }
+            return new(true, "Accepted");
         }
 
         var bestDayRate = Math.Max(job.DayRateMin ?? 0, job.DayRateMax ?? 0);

@@ -18,7 +18,8 @@ public enum FetchMode
     Disabled,
     ApprovedApi,
     AlertInbox,
-    PublicPage
+    PublicPage,
+    McpPlugin
 }
 
 public sealed record Money(decimal Amount, string Currency)

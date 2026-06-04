@@ -44,6 +44,7 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
 
     var reedKey     = GetSecret("REED_API_KEY");
     var gmailCreds  = GetSecret("GMAIL_CREDENTIALS_JSON");
+    var gmailUser   = GetSecret("GMAIL_USER_EMAIL");
     var gmailQuery  = GetSecret("GMAIL_SEARCH_QUERY")        ?? "label:job-alerts is:unread";
     var indeedQuery = GetSecret("INDEED_GMAIL_SEARCH_QUERY") ?? "from:jobalerts-noreply@indeed.com is:unread";
     var slackUrl    = GetSecret("SLACK_WEBHOOK_URL");
@@ -61,24 +62,25 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
         Console.WriteLine("[source] Reed API: skipped (REED_API_KEY not set)");
     }
 
-    if (!string.IsNullOrWhiteSpace(gmailCreds))
+    var gmailConfigured = !string.IsNullOrWhiteSpace(gmailCreds) && !string.IsNullOrWhiteSpace(gmailUser);
+    if (gmailConfigured)
     {
-        sources.Add(new GmailAlertJobSourceAdapter(gmailCreds, gmailQuery));
+        sources.Add(new GmailAlertJobSourceAdapter(gmailCreds, gmailQuery, gmailUser));
         Console.WriteLine("[source] Gmail Alerts: enabled");
 
-        sources.Add(new IndeedAlertJobSourceAdapter(gmailCreds, indeedQuery));
+        sources.Add(new IndeedAlertJobSourceAdapter(gmailCreds, indeedQuery, gmailUser));
         Console.WriteLine("[source] Indeed UK (alert emails): enabled");
     }
     else
     {
-        Console.WriteLine("[source] Gmail Alerts: skipped (GMAIL_CREDENTIALS_JSON not set)");
-        Console.WriteLine("[source] Indeed UK:    skipped (GMAIL_CREDENTIALS_JSON not set)");
+        Console.WriteLine("[source] Gmail Alerts: skipped (GMAIL_CREDENTIALS_JSON or GMAIL_USER_EMAIL not set)");
+        Console.WriteLine("[source] Indeed UK:    skipped (GMAIL_CREDENTIALS_JSON or GMAIL_USER_EMAIL not set)");
     }
 
     if (sources.Count == 0)
     {
         Console.WriteLine("[warn] No live sources configured — falling back to sample data.");
-        Console.WriteLine("[warn] Set REED_API_KEY and/or GMAIL_CREDENTIALS_JSON in .env to use real data.");
+        Console.WriteLine("[warn] Set REED_API_KEY and/or Gmail settings in .env to use real data.");
         sources.AddRange(SampleSources.Create(today));
     }
 
@@ -86,8 +88,8 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     var policies = new List<SourcePolicy>
     {
         new("Reed",         FetchMode.ApprovedApi, !string.IsNullOrWhiteSpace(reedKey),    TimeSpan.FromSeconds(3),  new DateOnly(2026, 6, 3)),
-        new("Gmail Alerts", FetchMode.AlertInbox,  !string.IsNullOrWhiteSpace(gmailCreds), TimeSpan.FromSeconds(0),  new DateOnly(2026, 6, 3)),
-        new("Indeed UK",    FetchMode.AlertInbox,  !string.IsNullOrWhiteSpace(gmailCreds), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3))
+        new("Gmail Alerts", FetchMode.AlertInbox,  gmailConfigured, TimeSpan.FromSeconds(0),  new DateOnly(2026, 6, 3)),
+        new("Indeed UK",    FetchMode.AlertInbox,  gmailConfigured, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3))
     };
 
     // ── run ───────────────────────────────────────────────────────────────────

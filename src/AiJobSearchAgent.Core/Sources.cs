@@ -42,11 +42,13 @@ public sealed class GmailAlertJobSourceAdapter : IJobSourceAdapter
 {
     private readonly string credentialsJson;
     private readonly string query;
+    private readonly string userEmail;
 
-    public GmailAlertJobSourceAdapter(string? credentialsJson, string query = "label:job-alerts is:unread")
+    public GmailAlertJobSourceAdapter(string? credentialsJson, string query = "label:job-alerts is:unread", string? userEmail = null)
     {
         this.credentialsJson = credentialsJson ?? string.Empty;
         this.query = query;
+        this.userEmail = userEmail ?? string.Empty;
     }
 
     public string SourceName => "Gmail Alerts";
@@ -58,10 +60,17 @@ public sealed class GmailAlertJobSourceAdapter : IJobSourceAdapter
             return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), ["Gmail credentials not configured."]);
         }
 
+        if (string.IsNullOrWhiteSpace(userEmail))
+        {
+            return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), ["GMAIL_USER_EMAIL is not configured. Service-account Gmail access requires a delegated mailbox user."]);
+        }
+
         try
         {
+            var mailbox = userEmail.Trim();
             var credential = GoogleCredential.FromJson(credentialsJson)
-                .CreateScoped(GmailService.Scope.GmailReadonly);
+                .CreateScoped(GmailService.Scope.GmailReadonly)
+                .CreateWithUser(mailbox);
 
             var service = new GmailService(new BaseClientService.Initializer
             {
@@ -69,7 +78,7 @@ public sealed class GmailAlertJobSourceAdapter : IJobSourceAdapter
                 ApplicationName = "AiJobSearchAgent"
             });
 
-            var listRequest = service.Users.Messages.List("me");
+            var listRequest = service.Users.Messages.List(mailbox);
             listRequest.Q = query;
             var response = await listRequest.ExecuteAsync(cancellationToken);
 
@@ -83,7 +92,7 @@ public sealed class GmailAlertJobSourceAdapter : IJobSourceAdapter
 
             foreach (var msgSummary in response.Messages)
             {
-                var message = await service.Users.Messages.Get("me", msgSummary.Id).ExecuteAsync(cancellationToken);
+                var message = await service.Users.Messages.Get(mailbox, msgSummary.Id).ExecuteAsync(cancellationToken);
                 var body = GetMessageBody(message);
 
                 if (string.IsNullOrWhiteSpace(body)) continue;
@@ -236,13 +245,15 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
 
     private readonly string? credentialsJson;
     private readonly string query;
+    private readonly string userEmail;
 
-    public IndeedAlertJobSourceAdapter(string? credentialsJson, string? query = null)
+    public IndeedAlertJobSourceAdapter(string? credentialsJson, string? query = null, string? userEmail = null)
     {
         this.credentialsJson = credentialsJson;
         this.query = string.IsNullOrWhiteSpace(query)
             ? "from:jobalerts-noreply@indeed.com is:unread"
             : query;
+        this.userEmail = userEmail ?? string.Empty;
     }
 
     public string SourceName => "Indeed UK";
@@ -254,10 +265,17 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
             return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), ["Indeed alert credentials not configured."]);
         }
 
+        if (string.IsNullOrWhiteSpace(userEmail))
+        {
+            return new SourceFetchResult(SourceName, Array.Empty<JobPosting>(), ["GMAIL_USER_EMAIL is not configured. Service-account Gmail access requires a delegated mailbox user."]);
+        }
+
         try
         {
+            var mailbox = userEmail.Trim();
             var credential = GoogleCredential.FromJson(credentialsJson)
-                .CreateScoped(GmailService.Scope.GmailReadonly);
+                .CreateScoped(GmailService.Scope.GmailReadonly)
+                .CreateWithUser(mailbox);
 
             var service = new GmailService(new BaseClientService.Initializer
             {
@@ -265,7 +283,7 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
                 ApplicationName = "AiJobSearchAgent"
             });
 
-            var listRequest = service.Users.Messages.List("me");
+            var listRequest = service.Users.Messages.List(mailbox);
             listRequest.Q = query;
             var listResponse = await listRequest.ExecuteAsync(cancellationToken);
 
@@ -280,7 +298,7 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
 
             foreach (var msgSummary in listResponse.Messages)
             {
-                var message = await service.Users.Messages.Get("me", msgSummary.Id).ExecuteAsync(cancellationToken);
+                var message = await service.Users.Messages.Get(mailbox, msgSummary.Id).ExecuteAsync(cancellationToken);
                 var body = GetMessageBody(message);
                 if (string.IsNullOrWhiteSpace(body)) continue;
 
@@ -507,5 +525,43 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
     {
         var data = Convert.FromBase64String(base64.Replace('-', '+').Replace('_', '/'));
         return System.Text.Encoding.UTF8.GetString(data);
+    }
+}
+
+/// <summary>
+/// Holds jobs injected by Claude via the <c>jobs.ingest_indeed</c> MCP tool.
+/// Claude calls the Indeed MCP plugin, normalises results, then pushes them here
+/// before calling <c>jobs.search</c> so they flow through the standard filter/score pipeline.
+/// </summary>
+public sealed class IndeedDirectJobSourceAdapter : IJobSourceAdapter
+{
+    private readonly System.Collections.Concurrent.ConcurrentBag<JobPosting> buffer = new();
+
+    public string SourceName => "Indeed Direct";
+
+    /// <summary>Adds a batch of pre-normalised jobs to the in-memory buffer.</summary>
+    public void Ingest(IEnumerable<JobPosting> jobs)
+    {
+        foreach (var job in jobs)
+            buffer.Add(job);
+    }
+
+    /// <summary>Clears all previously ingested jobs (call before a fresh ingest cycle).</summary>
+    public void Clear() => buffer.Clear();
+
+    public int Count => buffer.Count;
+
+    public Task<SourceFetchResult> FetchAsync(JobSearchCriteria criteria, CancellationToken cancellationToken)
+    {
+        var jobs = buffer.ToArray();
+        if (jobs.Length == 0)
+        {
+            return Task.FromResult(new SourceFetchResult(
+                SourceName,
+                Array.Empty<JobPosting>(),
+                ["No jobs ingested yet — call jobs.ingest_indeed before jobs.search."]));
+        }
+
+        return Task.FromResult(new SourceFetchResult(SourceName, jobs, Array.Empty<string>()));
     }
 }
