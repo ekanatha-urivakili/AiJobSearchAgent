@@ -37,3 +37,4 @@ config/search-criteria.json
 
 # Logs
 *.log
+.claude/settings.local.json

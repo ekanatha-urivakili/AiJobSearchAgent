@@ -67,7 +67,7 @@ C4Context
     System_Ext(google_identity, "Google Identity", "Authenticates service-account JSON for Gmail API")
 
     Rel(user, agent, "Triggers daily via GitHub Actions / schedule flag")
-    Rel(agent, gmail, "Reads unread job alert emails", "Gmail API v1 (HTTPS)")
+    Rel(agent, gmail, "Reads job alert emails as GMAIL_USER_EMAIL", "Gmail API v1 (HTTPS)")
     Rel(agent, reed_api, "Searches for jobs matching criteria", "HTTPS REST")
     Rel(agent, slack, "Posts high-score matches", "Incoming Webhook (HTTPS POST)")
     Rel(agent, google_identity, "Authenticates service-account credentials", "HTTPS")
@@ -86,6 +86,8 @@ graph TB
         subgraph Sources
             ISA["IJobSourceAdapter"]
             GJSA["GmailAlertJobSourceAdapter"]
+            IJSA["IndeedAlertJobSourceAdapter"]
+            IDJSA["IndeedDirectJobSourceAdapter"]
             SJSA["SampleJobSourceAdapter"]
         end
 
@@ -103,21 +105,19 @@ graph TB
         end
 
         subgraph Gmail
-            GCA["GoogleCredentialAuthenticator"]
-            PRP["ProviderParserRegistry"]
-            REP["ReedEmailParser"]
+            GCA["GoogleCredential\nCreateWithUser(GMAIL_USER_EMAIL)"]
         end
     end
 
     P --> GJSA
+    P --> IJSA
     P --> SJSA
     P --> JO
     P --> MFR
     P --> SJR
 
     GJSA --> GCA
-    GJSA --> PRP
-    PRP --> REP
+    IJSA --> GCA
 
     JO --> ISA
     JO --> SPG
@@ -125,6 +125,8 @@ graph TB
     JO --> CMS
 
     GJSA -.->|implements| ISA
+    IJSA -.->|implements| ISA
+    IDJSA -.->|implements| ISA
     SJSA -.->|implements| ISA
     MFR -.->|implements| IJR
     SJR -.->|implements| IJR
@@ -138,7 +140,8 @@ sequenceDiagram
     participant W as Worker (Program.cs)
     participant JO as JobSearchOrchestrator
     participant GJSA as GmailAlertJobSourceAdapter
-    participant GAuth as GoogleCredentialAuthenticator
+    participant IJSA as IndeedAlertJobSourceAdapter
+    participant GAuth as GoogleCredential
     participant GmailAPI as Gmail API
     participant ReedAPI as Reed API
     participant Scorer as CvMatchScorer
@@ -151,17 +154,23 @@ sequenceDiagram
 
     loop For each enabled source
         JO->>GJSA: FetchAsync(criteria, ct)
-        GJSA->>GAuth: Authenticate service-account JSON
+        GJSA->>GAuth: FromJson + CreateScoped + CreateWithUser
         GAuth-->>GJSA: Gmail service credential
-        GJSA->>GmailAPI: users.messages.list (label:job-alerts is:unread)
+        GJSA->>GmailAPI: users.messages.list(GMAIL_USER_EMAIL)
         GmailAPI-->>GJSA: [messageId, ...]
         loop For each message
-            GJSA->>GmailAPI: users.messages.get(messageId)
+            GJSA->>GmailAPI: users.messages.get(GMAIL_USER_EMAIL, messageId)
             GmailAPI-->>GJSA: raw email (base64)
             GJSA->>GJSA: ParseEmailToJobPostings()
         end
-        GJSA->>GmailAPI: users.messages.batchModify (mark as read)
         GJSA-->>JO: SourceFetchResult([JobPosting, ...])
+    end
+
+    opt Indeed UK enabled
+        JO->>IJSA: FetchAsync(criteria, ct)
+        IJSA->>GmailAPI: users.messages.list(GMAIL_USER_EMAIL, INDEED_GMAIL_SEARCH_QUERY)
+        GmailAPI-->>IJSA: Indeed alert messages
+        IJSA-->>JO: SourceFetchResult([JobPosting, ...])
     end
 
     JO->>JO: Deduplicate(allJobs)
@@ -495,7 +504,7 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 
 ### 3.8 Source Policy Alignment
 
-The current source policies include Reed, Gmail Alerts, and Indeed UK. Gmail-backed adapters must use the same source names as those policies so `SourcePolicyGuard.CanFetch()` allows them through.
+The current source policies include Reed, Gmail Alerts, Indeed UK, and Indeed Direct. Gmail-backed adapters must use the same source names as those policies so `SourcePolicyGuard.CanFetch()` allows them through.
 
 ```mermaid
 flowchart LR
@@ -503,10 +512,12 @@ flowchart LR
     C["GmailAlertJobSourceAdapter\nSourceName='Gmail Alerts'"] --> B
     D["SourcePolicy('Indeed UK', AlertInbox, Enabled=true)"] --> B
     E["IndeedAlertJobSourceAdapter\nSourceName='Indeed UK'"] --> B
-    B --> F["CanFetch → Allowed"]
+    F["SourcePolicy('Indeed Direct', McpPlugin, Enabled=true)"] --> B
+    G["IndeedDirectJobSourceAdapter\nSourceName='Indeed Direct'"] --> B
+    B --> H["CanFetch -> Allowed"]
 ```
 
-**Note:** Gmail-backed adapters return jobs only for their configured policy source. `GmailAlertJobSourceAdapter` reports generic Gmail alerts and `IndeedAlertJobSourceAdapter` reports Indeed UK alerts.
+**Note:** Gmail-backed adapters return jobs only for their configured policy source. `GmailAlertJobSourceAdapter` reports generic Gmail alerts and `IndeedAlertJobSourceAdapter` reports Indeed UK alerts. `IndeedDirectJobSourceAdapter` is not Gmail-backed; it returns only jobs previously injected through `jobs.ingest_indeed`.
 
 **Decision:** Register one adapter per provider. Simpler policy matching, clearer error reporting.
 

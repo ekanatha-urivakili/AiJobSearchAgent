@@ -5,7 +5,7 @@
 This repository contains a full .NET and React implementation of an automated job search agent:
 
 - `src/AiJobSearchAgent.Core`: Domain models, filtering, and scoring logic.
-- `src/AiJobSearchAgent.McpServer`: Dual-mode server (MCP STDIO for AI clients, HTTP for the Web UI), settings API, CV upload API, and live source integrations.
+- `src/AiJobSearchAgent.McpServer`: Dual-mode server (MCP STDIO for AI clients, HTTP for the Web UI), settings API, CV upload API, current-result cache, and live source integrations.
 - `src/AiJobSearchAgent.Worker`: Daily scheduler and reporter.
 - `frontend/`: React/Vite/TypeScript dashboard.
 - `tests/AiJobSearchAgent.Tests`: Regression tests for filtering and scoring.
@@ -27,6 +27,7 @@ flowchart TD
         HttpApi["HTTP API\n(--http)"]
         StdioMcp["STDIO MCP Server\n(default)"]
         McpService["Job Search Service"]
+        ResultsApi["Jobs API\nGET /api/jobs/results\nGET /api/jobs/search\nPOST /api/jobs/ingest_indeed"]
         ConfigApi["Settings API\nGET/POST /api/config"]
         CvApi["CV API\nGET /api/cvs\nPOST /api/cvs/upload"]
         SettingsRepo["SettingsRepository\napp_settings + AES-GCM"]
@@ -41,15 +42,18 @@ flowchart TD
 
     subgraph Sources["Job Sources"]
         ReedApi["Reed API Adapter"]
-        Gmail["Gmail Alert Adapter"]
+        Gmail["Gmail Alert Adapter\n(delegated Gmail mailbox)"]
         Indeed["Indeed Alert Adapter\n(via Gmail alerts)"]
+        IndeedDirect["Indeed Direct Adapter\n(in-memory MCP ingest buffer)"]
     end
 
     WebUI --> HttpApi
+    WebUI --> ResultsApi
     WebUI --> ConfigApi
     WebUI --> CvApi
     McpClient --> StdioMcp
-    HttpApi --> McpService
+    HttpApi --> ResultsApi
+    ResultsApi --> McpService
     StdioMcp --> McpService
     ConfigApi --> SettingsRepo
     CvApi --> CvFolder[("CVs/")]
@@ -59,9 +63,11 @@ flowchart TD
     Orchestrator --> ReedApi
     Orchestrator --> Gmail
     Orchestrator --> Indeed
+    Orchestrator --> IndeedDirect
     Orchestrator --> Filter
     Orchestrator --> Scorer
 
+    McpClient -- "jobs.ingest_indeed" --> StdioMcp
     SettingsRepo --> PostgreSQL[("PostgreSQL")]
     Orchestrator --> Reports["Markdown Reports"]
 ```
@@ -79,7 +85,8 @@ flowchart TB
         DevMcp --> LocalPg
         DevWorker --> LocalPg
         DevMcp --> LocalCvs
-        DevUI -- fetch --> DevMcp
+        DevUI -- "GET /api/jobs/results" --> DevMcp
+        DevUI -- "refresh: GET /api/jobs/search" --> DevMcp
     end
 
     subgraph Railway["Railway Production"]
@@ -105,9 +112,10 @@ flowchart TD
     App["Entrypoint"] --> Config["Configuration\n(Env Vars)"]
     App --> Settings["Settings API\n(PostgreSQL app_settings)"]
     App --> CvUpload["CV Upload API\n(CVs folder)"]
+    App --> Results["Jobs API\nresults/search/ingest"]
     Config --> Criteria["Search Criteria"]
     Settings --> Criteria
-    App --> Orchestrator["Orchestrator"]
+    Results --> Orchestrator["Orchestrator"]
     Orchestrator --> Policy["Source Policy Guard"]
     Orchestrator --> Adapters["Source Adapters"]
     Adapters --> RawJobs["Raw Job Postings"]
@@ -131,6 +139,7 @@ flowchart TD
 | Reed Adapter | Fetches and maps jobs from Reed API. | Live |
 | Gmail Adapter | Reads Gmail job alerts using configured service account JSON. | Live |
 | Indeed Adapter | Parses Indeed alert emails from Gmail. | Live |
+| Indeed Direct Adapter | Holds normalized jobs injected through `jobs.ingest_indeed` in process memory. | Live |
 | Deduplicator | Ensures unique results by source job ID. | Live |
 
 ## Data Model
@@ -197,18 +206,26 @@ sequenceDiagram
     participant Client as Web UI / MCP Client
     participant Server as McpServer
     participant Settings as SettingsRepository
+    participant Direct as Indeed Direct Buffer
     participant Orchestrator
     participant Reed as Reed API
     participant Gmail as Gmail API
     participant Scorer as Filter/Scorer
 
-    Client->>Server: Request Search (HTTP or MCP Tool)
+    opt MCP client has external Indeed results
+        Client->>Server: jobs.ingest_indeed
+        Server->>Direct: Store normalized jobs in process memory
+    end
+
+    Client->>Server: Request latest results or fresh search
     Server->>Settings: Load saved settings (HTTP startup/config)
     Server->>Orchestrator: RunAsync(Criteria)
     Orchestrator->>Reed: FetchAsync
     Reed-->>Orchestrator: JobPostings
     Orchestrator->>Gmail: FetchAsync (Gmail + Indeed alerts)
     Gmail-->>Orchestrator: JobPostings
+    Orchestrator->>Direct: FetchAsync (Indeed Direct)
+    Direct-->>Orchestrator: JobPostings
     Orchestrator->>Scorer: Evaluate & Score
     Scorer-->>Orchestrator: JobMatches
     Orchestrator->>Orchestrator: Deduplicate (Source|ID)
@@ -227,13 +244,15 @@ flowchart TD
     Location -- Yes --> Title{"Title matches\nsenior target roles?"}
     Title -- No --> RejectTitle["Reject: weak title match"]
     Title -- Yes --> Employment{"Permanent or contract?"}
-    Employment -- Permanent --> Salary{"Salary >= minimum?"}
+    Employment -- Permanent --> SalaryKnown{"Salary\npublished?"}
     Employment -- Contract --> Rate{"Day rate >= minimum?"}
+    SalaryKnown -- Yes --> Salary{"Salary >= minimum?"}
+    SalaryKnown -- No --> Score
     Salary -- No --> RejectSalary["Reject: salary below threshold"]
+    Salary -- Yes --> Score["Score against CV keywords"]
     Rate -- No --> RejectRate["Reject: rate below threshold"]
     Rate -- Yes --> Duration{"Duration >= minimum months?"}
     Duration -- No --> RejectDuration["Reject: short contract"]
-    Salary -- Yes --> Score["Score against CV keywords"]
     Duration -- Yes --> Score
     Score --> Recommend{"Recommended?"}
     Recommend -- Yes --> StoreRecommended["Store recommended match"]

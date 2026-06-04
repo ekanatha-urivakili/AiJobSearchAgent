@@ -1,8 +1,8 @@
 # MCP Job Sites Integration Plan
 
-**Status:** In progress; Reed API, Gmail alerts, Indeed alert emails, HTTP dashboard config, and CV upload are implemented.
-**Date:** 2026-06-03
-**Scope:** MCP server integration for UK job discovery from Reed, Gmail Alerts, and Indeed alert emails.
+**Status:** In progress; Reed API, Gmail alerts, Indeed alert emails, Indeed Direct MCP ingestion, HTTP dashboard config, and CV upload are implemented.
+**Date:** 2026-06-04
+**Scope:** MCP server integration for UK job discovery from Reed, Gmail Alerts, Indeed alert emails, and externally fetched Indeed MCP plugin results.
 **Architecture stance:** Compliance-first. The MCP server must wrap approved APIs, alert inboxes, RSS feeds, or manual imports. It must not bypass login walls, CAPTCHA, anti-bot controls, paywalls, disallowed `robots.txt` paths, or source terms.
 
 ## 1. Executive Decision
@@ -29,14 +29,14 @@ The MCP server should not be a scraping bot. It should be a controlled integrati
 | F-03 | STDIO transport cannot tolerate normal console logging on stdout. | Host logs can corrupt MCP protocol messages. | Clear default logging providers or route logs away from stdout before productionizing. |
 | F-04 | `jobs.search` needs readiness semantics for sources requiring imported alerts or secrets. | Clients otherwise cannot distinguish "no jobs" from "not configured". | `sources.health` is mandatory before live source use and must expose `ready`, `requiredSecret`, mode, and policy state. |
 | F-05 | Reed URL provenance remains a hard requirement. | Constructed URLs can break or mislead downstream report consumers. | Skip Reed jobs that lack an API-provided absolute `jobUrl`; do not synthesize URLs in the contract. |
-| F-06 | Alert-only sources require durable imported data before they can participate in search. | Empty adapters would hide missing ingestion work. | Runtime source registration is limited to Reed, Gmail Alerts, and Indeed UK. Removed sources require a fresh approved-access design before reintroduction. |
+| F-06 | Alert-only or MCP-injected sources require visible readiness before they participate in search. | Empty adapters would hide missing ingestion work. | Runtime source registration is limited to Reed, Gmail Alerts, Indeed UK, and Indeed Direct. Removed sources require a fresh approved-access design before reintroduction. |
 
 ## 2. Source Findings
 
 | Source | Recommended mode | Secondary mode | Do not do | Evidence |
 |---|---|---|---|---|
 | Reed | Official Reed Jobseeker API | Reed job alert email ingestion | Do not crawl `/api/` as a generic bot; use the API key flow. | Reed documents search and job details API endpoints and requires the API key in basic auth. Reed help also supports saved searches and daily or weekly email alerts. |
-| Indeed | Indeed Job Alert email ingestion (✅ implemented — AlertInbox via Gmail) | Approved Indeed partner API if access is granted | Do not scrape Indeed search pages or automate access without permission. | Indeed support documents job alerts for signed-in accounts. `IndeedAlertJobSourceAdapter` parses `from:jobalerts-noreply@indeed.com` emails via the Gmail service account. |
+| Indeed | Indeed Job Alert email ingestion (implemented, `AlertInbox` via Gmail) and `Indeed Direct` MCP-injected normalized jobs | Approved Indeed partner API if access is granted | Do not scrape Indeed search pages or automate access without permission. | `IndeedAlertJobSourceAdapter` parses `from:jobalerts-noreply@indeed.com` emails via the Gmail service account. `jobs.ingest_indeed` accepts already fetched and normalized plugin results into an in-memory source buffer. |
 
 ## 3. MCP Server HLD
 
@@ -49,18 +49,20 @@ flowchart LR
     E --> F["6. Reed API adapter"]
     E --> G["7. Gmail alert adapter"]
     E --> H["8. Indeed alert adapter via Gmail"]
+    E --> I["9. Indeed Direct adapter\nMCP-ingested jobs"]
 
-    F --> J["9. Job normalizer"]
+    F --> J["10. Job normalizer"]
     G --> J
     H --> J
+    I --> J
 
-    J --> K["10. Existing filter engine"]
-    K --> L["11. Existing CV scorer"]
-    L --> M["12. Report generator"]
-    M --> N["13. MCP structured response"]
-    M --> O["14. MCP report resource"]
+    J --> K["11. Existing filter engine"]
+    K --> L["12. Existing CV scorer"]
+    L --> M["13. Report generator"]
+    M --> N["14. MCP structured response"]
+    M --> O["15. MCP report resource"]
 
-    B --> P["15. Settings API + CV upload API\n(HTTP mode)"]
+    B --> P["16. Settings API + CV upload API\n(HTTP mode)"]
     P --> Q[("app_settings / CVs/")]
 ```
 
@@ -88,12 +90,11 @@ src/
 
 | Tool | Purpose | Writes? | Source access |
 |---|---|---:|---|
-| `jobs.search` | Search configured sources and return filtered/scored jobs. | No, unless persistence is enabled. | Reed API, Gmail alert emails, and Indeed Gmail alerts. |
-| `jobs.get` | Fetch one normalized job by source and source job ID. | No | Reed job details API, local DB, alert cache, or approved source API. |
-| `jobs.import_alert_email` | Import a user-provided alert email body or mailbox message ID. | Yes | Local alert inbox or pasted email content. Current runtime alert ingestion uses Gmail-backed adapters; clients should call `sources.health` to see whether alert sources have importable content ready. |
-| `jobs.generate_report` | Generate a Markdown report from a search run or supplied job list. | Yes | Local report filesystem and optional DB. |
+| `jobs.search` | Search configured sources and return filtered/scored jobs. | No | Reed API, Gmail alert emails, Indeed Gmail alerts, and `Indeed Direct` buffer. |
+| `jobs.get` | Fetch one normalized job by source and source job ID. | No | Local in-memory cache, or Reed job details API when source is Reed and the job is not cached. |
+| `jobs.ingest_indeed` | Ingest normalized jobs fetched by an external Indeed MCP plugin into the local `Indeed Direct` source. | Yes | Process-local in-memory buffer. |
+| `jobs.generate_report` | Generate a Markdown report from the latest search run, or run a default search first when no run exists. | No | In-memory latest run and generated Markdown response. |
 | `sources.health` | Show source policy, last fetch status, and integration mode. | No | Local DB/config only. |
-| `sources.review_policy` | Return compliance checklist for a source before enabling it. | No | Local source policy metadata. |
 
 ### 4.3 MCP Resources
 
@@ -135,7 +136,7 @@ Policy:
 
 ### 5.2 Indeed Adapter
 
-**Priority:** Phase 2 — ✅ implemented 2026-06-03 via `AlertInbox` (Gmail alert email ingestion).
+**Priority:** Phase 2 — implemented 2026-06-03 via `AlertInbox` (Gmail alert email ingestion).
 
 `IndeedAlertJobSourceAdapter` reads Indeed job alert emails from the Gmail inbox using the shared `GMAIL_CREDENTIALS_JSON` service account delegated to `GMAIL_USER_EMAIL`. The adapter:
 
@@ -163,6 +164,33 @@ Policy (live):
   "minimumDelaySeconds": 10,
   "requiredSecret": "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
   "lastReviewedOn": "2026-06-03"
+}
+```
+
+### 5.3 Indeed Direct Adapter
+
+**Priority:** Phase 2.5 — implemented 2026-06-04 via `McpPlugin`.
+
+`IndeedDirectJobSourceAdapter` holds normalized Indeed jobs injected by `jobs.ingest_indeed`. The MCP client remains responsible for calling an external Indeed MCP plugin, mapping the plugin output into `IndeedJobInput`, and then invoking this repository's ingestion tool.
+
+Implementation notes:
+
+- `JobSearchMcpService.IngestIndeedJobs()` maps each `IndeedJobInput` into a `JobPosting` with source `Indeed Direct`.
+- `clearFirst=true` clears the process-local buffer before adding the new batch.
+- `jobs.search` can run with `sources=["Indeed Direct"]`; omitting `sources` includes it with Reed, Gmail Alerts, and Indeed UK.
+- The source is ready only when the buffer has at least one job. Restarting `AiJobSearchAgent.McpServer` clears the buffer.
+- **Claude Pro is not required to use this adapter.** `POST /api/jobs/ingest_indeed` is a plain HTTP endpoint. Any caller — a cron job, CI pipeline, or custom script — can POST normalized jobs to it directly. Claude is one convenient source of input data (via the Indeed MCP plugin) but is not a dependency. Forks that want to avoid Claude can feed the endpoint from the Indeed Publisher API or any other approved job source.
+
+Policy (live):
+
+```json
+{
+  "sourceName": "Indeed Direct",
+  "fetchMode": "McpPlugin",
+  "enabled": true,
+  "minimumDelaySeconds": 0,
+  "requiredSecret": "Call jobs.ingest_indeed before jobs.search",
+  "lastReviewedOn": "2026-06-04"
 }
 ```
 
@@ -208,16 +236,30 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A["1. Job site sends alert email/RSS item"] --> B["2. Dedicated job-alert inbox"]
-    B --> C["3. MCP tool jobs.import_alert_email"]
-    C --> D["4. Identify source by sender/domain/template"]
+    A["1. Job site sends alert email"] --> B["2. Delegated Gmail mailbox"]
+    B --> C["3. Gmail or Indeed alert adapter queries Gmail API"]
+    C --> D["4. Parse source-specific alert HTML"]
     D --> E{"5. Source policy allows AlertInbox?"}
-    E -->|"No"| F["6. Reject import and record policy reason"]
-    E -->|"Yes"| G["7. Parse alert items"]
-    G --> H["8. Normalize to JobPosting"]
-    H --> I["9. Deduplicate by source ID, URL, company/title/location"]
-    I --> J["10. Run filters and scoring"]
-    J --> K["11. Store or return matches"]
+    E -->|"No"| F["6. Return policy warning"]
+    E -->|"Yes"| G["7. Normalize to JobPosting"]
+    G --> H["8. Deduplicate by source|sourceJobId"]
+    H --> I["9. Run filters and scoring"]
+    I --> J["10. Return matches and source status"]
+```
+
+## 7.1 Indeed Direct MCP Ingestion Flow
+
+```mermaid
+flowchart TD
+    A["1. MCP client calls external Indeed plugin"] --> B["2. Client maps plugin result to IndeedJobInput"]
+    B --> C["3. Call jobs.ingest_indeed"]
+    C --> D{"4. clearFirst?"}
+    D -->|"Yes"| E["5. Clear in-memory Indeed Direct buffer"]
+    D -->|"No"| F["5. Keep existing buffer"]
+    E --> G["6. Add normalized JobPosting records"]
+    F --> G
+    G --> H["7. Call jobs.search with sources=['Indeed Direct'] or all sources"]
+    H --> I["8. Standard filter, score, dedupe pipeline"]
 ```
 
 ## 8. API and Data Contracts
@@ -235,7 +277,7 @@ flowchart TD
   "minimumPermanentSalaryGbp": 75000,
   "minimumContractDayRateGbp": 400,
   "minimumContractMonths": 6,
-  "sources": ["Reed", "Gmail Alerts", "Indeed UK"]
+  "sources": ["Reed", "Gmail Alerts", "Indeed UK", "Indeed Direct"]
 }
 ```
 
@@ -274,6 +316,40 @@ flowchart TD
 }
 ```
 
+### 8.3 `jobs.ingest_indeed` Input
+
+```json
+{
+  "clearFirst": true,
+  "jobs": [
+    {
+      "jobId": "abc1234567890000",
+      "title": "Senior Software Engineer",
+      "company": "Example Ltd",
+      "location": "London",
+      "url": "https://uk.indeed.com/viewjob?jk=abc1234567890000",
+      "employmentType": "Permanent",
+      "workMode": "Hybrid",
+      "salaryMin": 75000,
+      "salaryMax": 90000,
+      "dayRateMin": null,
+      "dayRateMax": null,
+      "contractMonths": null,
+      "description": "Normalized job description text."
+    }
+  ]
+}
+```
+
+### 8.4 HTTP Jobs API
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/jobs/results` | Returns the latest in-memory run when one exists; otherwise performs and caches a default search. |
+| `GET /api/jobs/search` | Performs a fresh default search and replaces the latest in-memory run. |
+| `POST /api/jobs/ingest_indeed` | Ingests `IndeedJobInput` records into the process-local `Indeed Direct` buffer. |
+| `GET /api/jobs/{source}/{sourceJobId}` | Returns a job from the local cache, or fetches Reed details when source is Reed and the job is not cached. |
+
 **`url` field provenance:** `url` must come from the Reed API job details response field, not be constructed from `sourceJobId`. Reed's search endpoint may not return a full canonical URL — verify before finalising this contract. If the search endpoint omits it, call the job details endpoint for shortlisted results only and use that URL. If constructing URLs from `sourceJobId` turns out to be necessary, document the URL pattern and version it in the adapter, not the contract.
 
 ## 9. Security Controls
@@ -297,7 +373,7 @@ flowchart TD
 **Credential decision:** `REED_API_KEY` is optional at startup. Reed policy is `ApprovedApi` but not enabled/ready when the secret is absent.
 
 1. Add `src/AiJobSearchAgent.McpServer`. **Started 2026-06-01.**
-2. Expose `jobs.search`, `jobs.get`, `jobs.generate_report`, and `sources.health`. **Started 2026-06-01.**
+2. Expose `jobs.search`, `jobs.get`, `jobs.generate_report`, `jobs.ingest_indeed`, and `sources.health`. **Started 2026-06-01; Indeed ingestion added 2026-06-04.**
 3. Implement Reed API adapter. **Started 2026-06-01; requires live `REED_API_KEY` validation.**
 4. Keep sources not registered unless they have an approved API or Gmail-backed alert ingestion path.
 5. Add tests for tool schemas, policy gating, Reed mapping, and filter/scorer reuse.
@@ -305,10 +381,11 @@ flowchart TD
 ### Phase 2: Alert Inbox Integration
 
 1. Add mailbox or `.eml` import abstraction.
-2. ✅ Implement Gmail alert parser with source policy set to `AlertInbox`. — done 2026-06-03
-3. ✅ Implement Indeed alert parser with source policy set to `AlertInbox`. — done 2026-06-03
-4. Add alert fixture tests for each source template.
-5. Persist imported alert hashes to avoid duplicate reporting.
+2. Implement Gmail alert parser with source policy set to `AlertInbox`. Done 2026-06-03.
+3. Implement Indeed alert parser with source policy set to `AlertInbox`. Done 2026-06-03.
+4. Add `Indeed Direct` MCP plugin ingestion with source policy set to `McpPlugin`. Done 2026-06-04.
+5. Add alert fixture tests for each source template.
+6. Persist imported alert hashes to avoid duplicate reporting.
 
 ### Phase 3: Persistence and Review UX
 
@@ -334,6 +411,7 @@ flowchart TD
 | AC-05 | Every MCP tool has typed input and structured output. |
 | AC-06 | Every source call records source, mode, count, warnings, and policy decision. |
 | AC-07 | No secrets appear in logs, reports, test fixtures, or git diffs. |
+| AC-08 | `Indeed Direct` appears as ready only after `jobs.ingest_indeed` has loaded at least one job. |
 
 ## 12. Open Questions
 
@@ -493,6 +571,8 @@ Small supplementary diagrams were added above in the Authorization and Deduplica
 ---
 
 ## 16. Change log
+- 2026-06-04 (session 2): Fixed null-salary filter — permanent jobs with no published salary now pass through the salary gate rather than being rejected as below-threshold; they are scored normally and appear in results with a lower score than jobs with known salary. Added `GET /api/jobs/results` endpoint that returns the cached latest run without re-triggering the pipeline, preventing a race condition where the frontend's on-mount search call overwrote a freshly ingested Indeed Direct buffer. Added `ingest_indeed.sh` helper script (project root) for manual ingest + search from the terminal. Added "Claude Pro not required" clarification to `Indeed Direct` docs — `POST /api/jobs/ingest_indeed` is a generic HTTP endpoint; Claude is one possible data source, not a dependency.
+- 2026-06-04: Added `Indeed Direct` MCP ingestion docs and diagrams. Updated tool contracts, source policy descriptions, search source examples, HTTP jobs API behavior, and implementation phases to reflect `jobs.ingest_indeed`, `FetchMode.McpPlugin`, and `/api/jobs/results`.
 - 2026-06-03: Added DB-backed Settings screen and CV upload flow. Settings API now saves configurable values to PostgreSQL `app_settings`, encrypts secrets with `SETTINGS_ENCRYPTION_KEY`, masks secrets on read, and CV uploads save `.pdf`, `.docx`, and `.md` files under `CVs/` with replace-or-rename behavior.
 - 2026-06-03: Removed unsupported sources from runtime source registration, policy seeds, frontend-facing source output, docs, and diagrams.
 - 2026-06-03: Phase 2 Indeed `AlertInbox` integration implemented. Added `IndeedAlertJobSourceAdapter`, updated `JobSearchMcpService` policies/adapters/health, added `GMAIL_USER_EMAIL` and `INDEED_GMAIL_SEARCH_QUERY` env vars, added unit tests, updated README and this document.

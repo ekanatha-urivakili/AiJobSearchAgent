@@ -7,6 +7,8 @@ Automated job search agent for senior UK software roles matched against Ekanatha
 - `.NET 10` worker with daily scheduler (Europe/London timezone)
 - Reed API job source adapter (live)
 - Gmail job alert source adapter — reads job alert emails via Google service account credentials (live)
+- Indeed alert email adapter — parses Indeed alerts from the delegated Gmail mailbox (live)
+- Indeed Direct MCP ingestion — accepts normalized jobs fetched by an external MCP plugin into an in-memory source buffer
 - Source policy guard — per-source enable/disable and rate limiting
 - Deterministic filter engine — salary, day rate, location, title, recency
 - CV keyword scorer — core skills, domain, leadership signals
@@ -32,6 +34,7 @@ flowchart TD
         HttpApi["HTTP API\n(--http flag, port 5001)"]
         StdioMcp["STDIO MCP Server\n(default mode)"]
         McpService["JobSearchMcpService"]
+        ResultApi["Results API\nGET /api/jobs/results\nGET /api/jobs/search\nPOST /api/jobs/ingest_indeed"]
         ConfigApi["Config API\nGET/POST /api/config"]
         CvsApi["CV API\nGET /api/cvs\nPOST /api/cvs/upload"]
         SettingsRepo["SettingsRepository\nPostgreSQL + AES-GCM"]
@@ -50,6 +53,7 @@ flowchart TD
         ReedAdapter["Reed API Adapter"]
         GmailAdapter["GmailAlertJobSourceAdapter\n(Google.Apis.Gmail.v1)"]
         IndeedAdapter["IndeedAlertJobSourceAdapter\n(Indeed alert emails via Gmail)"]
+        IndeedDirect["IndeedDirectJobSourceAdapter\n(in-memory MCP ingest buffer)"]
     end
 
     subgraph Reporters
@@ -65,7 +69,8 @@ flowchart TD
     McpClient --> StdioMcp
     WebUI --> ConfigApi
     WebUI --> CvsApi
-    HttpApi --> McpService
+    HttpApi --> ResultApi
+    ResultApi --> McpService
     StdioMcp --> McpService
     McpService --> Orchestrator
     Scheduler --> Orchestrator
@@ -77,6 +82,7 @@ flowchart TD
     Orchestrator --> ReedAdapter
     Orchestrator --> GmailAdapter
     Orchestrator --> IndeedAdapter
+    Orchestrator --> IndeedDirect
     Orchestrator --> FilterEngine
     FilterEngine --> Scorer
     Scorer --> Dedup
@@ -85,6 +91,7 @@ flowchart TD
 
     GmailAdapter --> Gmail[("Gmail API")]
     IndeedAdapter --> Gmail
+    McpClient -- "jobs.ingest_indeed" --> StdioMcp
     ReedAdapter --> ReedAPI[("Reed API")]
     SlackReporter --> Slack[("Slack Webhook")]
     MdReporter --> Reports[("reports/")]
@@ -103,7 +110,8 @@ flowchart TB
         DotEnv[".env file\n(credentials + config)"]
         LocalCvs["CVs/\nlocal uploads"]
 
-        DevUI -- "GET /api/jobs/search" --> DevMcp
+        DevUI -- "GET /api/jobs/results" --> DevMcp
+        DevUI -- "explicit refresh: GET /api/jobs/search" --> DevMcp
         DevUI -- "GET/POST /api/config" --> DevMcp
         DevUI -- "GET/POST /api/cvs" --> DevMcp
         DevMcp --> LocalPg
@@ -142,13 +150,15 @@ flowchart TD
     Location -- Yes --> Title{"Title matches\ntarget roles?"}
     Title -- No --> RejectTitle["Reject: weak title"]
     Title -- Yes --> Employment{"Permanent or contract?"}
-    Employment -- Permanent --> Salary{"Salary >= minimum?"}
+    Employment -- Permanent --> SalaryKnown{"Salary\npublished?"}
     Employment -- Contract --> Rate{"Day rate >= minimum?"}
+    SalaryKnown -- Yes --> Salary{"Salary >= minimum?"}
+    SalaryKnown -- No --> Score
     Salary -- No --> RejectSalary["Reject: below salary floor"]
+    Salary -- Yes --> Score["Score against CV keywords\n(core skills, domain, leadership)"]
     Rate -- No --> RejectRate["Reject: below rate floor"]
     Rate -- Yes --> Duration{"Duration >= min months?"}
     Duration -- No --> RejectDuration["Reject: short contract"]
-    Salary -- Yes --> Score["Score against CV keywords\n(core skills, domain, leadership)"]
     Duration -- Yes --> Score
     Score --> Threshold{"Score >= 85?"}
     Threshold -- Yes --> Strong["Strong match → Slack alert"]
@@ -165,12 +175,18 @@ sequenceDiagram
     participant Client as Web UI / MCP Client
     participant Server as McpServer
     participant Settings as SettingsRepository
+    participant Ingest as Indeed Direct Buffer
     participant Orchestrator
     participant Reed as Reed API
     participant Gmail as Gmail API
     participant Scorer as Filter + Scorer
 
-    Client->>Server: Search (HTTP GET /api/jobs/search or MCP tool)
+    opt MCP client has external Indeed plugin results
+        Client->>Server: jobs.ingest_indeed
+        Server->>Ingest: Replace or append normalized jobs
+    end
+
+    Client->>Server: Search (HTTP GET /api/jobs/search or MCP jobs.search)
     Server->>Settings: Load saved config (HTTP mode)
     Server->>Orchestrator: RunAsync(criteria, profile)
 
@@ -180,6 +196,9 @@ sequenceDiagram
     Orchestrator->>Gmail: FetchAsync (service account credentials)
     Gmail-->>Orchestrator: JobPostings[] (parsed from alert emails)
 
+    Orchestrator->>Ingest: FetchAsync (Indeed Direct)
+    Ingest-->>Orchestrator: JobPostings[] (previously ingested)
+
     Orchestrator->>Scorer: Filter + score all jobs
     Scorer-->>Orchestrator: JobMatches[]
 
@@ -187,6 +206,8 @@ sequenceDiagram
     Orchestrator-->>Server: SearchRunResult
     Server-->>Client: Matches (JSON)
 ```
+
+`GET /api/jobs/results` returns the latest in-memory run when one exists. If no run has happened in the current HTTP server process, it performs a default search and caches that result. `GET /api/jobs/search` always triggers a fresh default search.
 
 ## Search Criteria
 
@@ -309,6 +330,14 @@ INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 
 The adapter extracts the stable Indeed job key (`jk` parameter) from each alert link and maps it to a canonical `https://uk.indeed.com/viewjob?jk=...` URL. Salary, location, employment type, and description are parsed from the email HTML. If `GMAIL_CREDENTIALS_JSON` and `GMAIL_USER_EMAIL` are configured, Indeed is automatically enabled.
 
+### Indeed Direct MCP Ingestion
+
+`jobs.ingest_indeed` is an MCP/HTTP ingestion path for jobs fetched by an external Indeed MCP plugin. The caller maps plugin results into `IndeedJobInput`; the server stores them in the `Indeed Direct` in-memory adapter. A later `jobs.search` can include `sources=["Indeed Direct"]`, or omit `sources` to include it with the other configured sources.
+
+The buffer is process-local. Restarting `AiJobSearchAgent.McpServer` clears it, and `clearFirst=true` replaces the previous batch before adding the new jobs.
+
+**Forking this project — Claude Pro not required.** The `POST /api/jobs/ingest_indeed` endpoint is a generic HTTP endpoint that accepts any `IndeedJobInput[]` payload. It has no dependency on Claude. Callers can feed it from the [Indeed Publisher API](https://ads.indeed.com/jobroll/xmlfeed), any other job board, or a custom scraper — Claude is only one possible way to obtain the input data. A Claude account with the Indeed MCP plugin is needed only if you want the Claude-mediated flow (Claude calls the plugin, maps results, then POSTs to this endpoint). The renaming of this adapter to something more generic (e.g. `ExternalJobIngestAdapter`) is a future cleanup task.
+
 ### Settings Panel
 
 The React dashboard includes a **Settings** screen where you can configure:
@@ -316,7 +345,7 @@ The React dashboard includes a **Settings** screen where you can configure:
 - Search schedule, postcode, radius, posting age, salary floor, day-rate floor, and minimum contract months.
 - `REED_API_KEY`.
 - Slack webhook URL.
-- Gmail service-account JSON and Gmail search query.
+- Gmail service-account JSON, delegated mailbox user, and Gmail search query.
 - Indeed Gmail alert query.
 
 `GET /api/config` returns saved values plus defaults, but secret values are masked in API responses. Blank secret fields preserve existing saved secrets.

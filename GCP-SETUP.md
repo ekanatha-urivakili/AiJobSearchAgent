@@ -1,81 +1,83 @@
+# GCP Gmail Setup
 
+## Prerequisite
 
-⚠️ Prerequisite: 
-You need Google Workspace, not personal Gmail
-Domain-Wide Delegation only works with Google Workspace (paid org account). It will never work with a @gmail.com personal account — Google blocks it by design.
-Your options:
+This implementation uses a Google service account with Google Workspace domain-wide delegation. It does not work with a personal `@gmail.com` mailbox.
 
-Option A — You already have a Google Workspace org → follow the steps below
-Option B — You don't → use OAuth 2.0 user credentials instead (different code path, works with personal Gmail — I can help with that separately)
+Options:
 
-If you have Workspace, proceed:
+- Google Workspace org: follow the steps below.
+- Personal Gmail: use an OAuth 2.0 user credential flow instead. That is a different code path and is not implemented in the current Gmail adapters.
 
-Step 1: GCP Project & Gmail API
+## Step 1: GCP Project And Gmail API
 
-Go to console.cloud.google.com
-Select or create a project (e.g. ai-job-search-agent)
-Navigate to APIs & Services → Library
-Search for Gmail API → click Enable
+1. Go to Google Cloud Console.
+2. Select or create a project, for example `ai-job-search-agent`.
+3. Navigate to APIs & Services -> Library.
+4. Search for Gmail API and enable it.
 
+## Step 2: Create A Service Account
 
-Step 2: Create a Service Account
+1. Go to IAM & Admin -> Service Accounts.
+2. Click Create Service Account.
+3. Use a name such as `job-search-gmail`.
+4. Click Create and Continue.
+5. Skip role grants. Gmail mailbox access comes from domain-wide delegation, not IAM roles.
+6. Click Done.
 
-Go to IAM & Admin → Service Accounts
-Click Create Service Account
+## Step 3: Create And Download JSON Key
 
-Name: job-search-gmail
-ID: auto-fills
-Click Create and Continue
+1. Open the service account.
+2. Go to the Keys tab.
+3. Click Add Key -> Create new key.
+4. Select JSON and create the key.
+5. Save the downloaded JSON. Its single-line contents become `GMAIL_CREDENTIALS_JSON`.
 
+## Step 4: Enable Domain-Wide Delegation
 
-Skip the role grants (no GCP roles needed — Gmail access is via DWD, not IAM)
-Click Done
+1. Open the service account Details tab.
+2. Click Edit.
+3. Expand Advanced settings or find Domain-wide delegation.
+4. Enable Google Workspace Domain-wide Delegation.
+5. Set a product name such as `Job Search Gmail Access`.
+6. Save.
+7. Copy the numeric Client ID shown for the service account.
 
+## Step 5: Authorize In Google Workspace Admin
 
-Step 3: Create & Download JSON Key
+This grants the mailbox permission. GCP setup alone is not enough.
 
-Click into the service account you just created
-Go to the Keys tab
-Click Add Key → Create new key
-Select JSON → click Create
-A .json file downloads — this is your GMAIL_CREDENTIALS_JSON
+1. Go to Google Admin Console as a Workspace super admin.
+2. Navigate to Security -> Access and data control -> API controls.
+3. Open Manage Domain Wide Delegation.
+4. Click Add new.
+5. Use the Client ID from Step 4.
+6. Add this OAuth scope:
 
+```text
+https://www.googleapis.com/auth/gmail.readonly
+```
 
-Step 4: Enable Domain-Wide Delegation on the Service Account
+7. Click Authorize.
 
-Still on the service account page, go to the Details tab
-Click Edit (pencil icon)
-Expand Advanced settings (or look for "Domain-wide delegation")
-Check Enable Google Workspace Domain-wide Delegation
-Give it a name (e.g. Job Search Gmail Access)
-Click Save
-Copy the Client ID shown — it's a long number like 123456789012345678901. You'll need this in the next step.
+## Step 6: Configure The App
 
+Set these values in `.env`, Railway variables, Docker config, or the Settings screen:
 
-Step 5: Authorize in Google Workspace Admin Console
-This is the step that actually grants the permission — GCP alone isn't enough.
-
-Go to admin.google.com (must be a Workspace super admin)
-Navigate to Security → Access and data control → API controls
-Click Manage Domain Wide Delegation at the bottom
-Click Add new
-Fill in:
-
-Client ID: paste the number from Step 4
-OAuth Scopes: https://www.googleapis.com/auth/gmail.readonly
-
-
-Click Authorize
-
-
-Step 6: Configure Your App
-Set these environment variables (in .env or Railway/Docker config):
+```text
 GMAIL_CREDENTIALS_JSON=<contents of the JSON key file downloaded in Step 3>
 GMAIL_USER_EMAIL=yourname@yourdomain.com
-GMAIL_USER_EMAIL must be an actual mailbox in your Workspace org — the service account impersonates that user. It's the inbox that receives the job alert emails.
+GMAIL_SEARCH_QUERY=label:job-alerts is:unread
+INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
+```
 
-Step 7: Verify
-In the app, call sources.health — Gmail Alerts and Indeed UK should now show Ready: true. Then run jobs.search and the unauthorized_client error should be gone.
+`GMAIL_USER_EMAIL` must be an actual mailbox in the Workspace org. The service account impersonates this mailbox, and this mailbox must receive the job alert emails.
 
-If you're on personal Gmail
-The simpler alternative is OAuth 2.0 with a refresh token — you authenticate once in a browser, store the refresh token, and the app uses it going forward. No Workspace org needed. Let me know and I'll walk through that code path instead.
+## Step 7: Verify
+
+1. Start the MCP server in HTTP mode or STDIO mode.
+2. Call `sources.health`.
+3. `Gmail Alerts` and `Indeed UK` should show `ready=true` when both `GMAIL_CREDENTIALS_JSON` and `GMAIL_USER_EMAIL` are configured.
+4. Run `jobs.search` or call `GET /api/jobs/search`.
+
+If the setup is correct, Gmail-backed sources should no longer return `unauthorized_client`.
