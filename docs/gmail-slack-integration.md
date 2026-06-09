@@ -14,10 +14,9 @@ Current variables:
 
 | Variable | Required | Notes |
 |---|---:|---|
-| `GMAIL_CREDENTIALS_JSON` | Yes, if Gmail/Indeed alert ingestion is enabled | Service-account JSON, pasted as one value. |
-| `GMAIL_USER_EMAIL` | Yes, if Gmail/Indeed alert ingestion is enabled | Delegated mailbox that receives job alerts. |
+| `GMAIL_CREDENTIALS_JSON` | Yes, if Gmail alert ingestion is enabled | Service-account JSON, pasted as one value. |
+| `GMAIL_USER_EMAIL` | Yes, if Gmail alert ingestion is enabled | Delegated mailbox that receives job alerts. |
 | `GMAIL_SEARCH_QUERY` | No | Default Gmail alert search. |
-| `INDEED_GMAIL_SEARCH_QUERY` | No | Targets Indeed job alert emails. |
 | `SLACK_WEBHOOK_URL` | No | Posts high-score matches when configured. |
 | `SETTINGS_ENCRYPTION_KEY` | Yes, if saving secrets from Settings UI | 32-byte base64 key generated with `openssl rand -base64 32`. |
 
@@ -86,7 +85,7 @@ graph TB
         subgraph Sources
             ISA["IJobSourceAdapter"]
             GJSA["GmailAlertJobSourceAdapter"]
-            IJSA["IndeedAlertJobSourceAdapter"]
+            IJSA["IndeedDirectJobSourceAdapter"]
             IDJSA["IndeedDirectJobSourceAdapter"]
             SJSA["SampleJobSourceAdapter"]
         end
@@ -140,7 +139,7 @@ sequenceDiagram
     participant W as Worker (Program.cs)
     participant JO as JobSearchOrchestrator
     participant GJSA as GmailAlertJobSourceAdapter
-    participant IJSA as IndeedAlertJobSourceAdapter
+    participant IJSA as IndeedDirectJobSourceAdapter
     participant GAuth as GoogleCredential
     participant GmailAPI as Gmail API
     participant ReedAPI as Reed API
@@ -166,11 +165,9 @@ sequenceDiagram
         GJSA-->>JO: SourceFetchResult([JobPosting, ...])
     end
 
-    opt Indeed UK enabled
+    opt Indeed Direct enabled
         JO->>IJSA: FetchAsync(criteria, ct)
-        IJSA->>GmailAPI: users.messages.list(GMAIL_USER_EMAIL, INDEED_GMAIL_SEARCH_QUERY)
-        GmailAPI-->>IJSA: Indeed alert messages
-        IJSA-->>JO: SourceFetchResult([JobPosting, ...])
+        IJSA-->>JO: SourceFetchResult(previously ingested JobPostings)
     end
 
     JO->>JO: Deduplicate(allJobs)
@@ -350,7 +347,7 @@ sequenceDiagram
     GConsole-->>Dev: service-account JSON
     Dev->>EnvStore: Store GMAIL_CREDENTIALS_JSON
     Dev->>EnvStore: Store GMAIL_USER_EMAIL
-    Dev->>EnvStore: Store GMAIL_SEARCH_QUERY / INDEED_GMAIL_SEARCH_QUERY
+    Dev->>EnvStore: Store GMAIL_SEARCH_QUERY / GMAIL_SEARCH_QUERY
 
     Worker->>EnvStore: Read service-account JSON
     Worker->>Gmail: Authenticate and query unread job alerts
@@ -483,7 +480,6 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 | `GMAIL_CREDENTIALS_JSON` | Yes (if Gmail enabled) | `{"type":"service_account",...}` | Google service-account JSON as one value |
 | `GMAIL_USER_EMAIL` | Yes (if Gmail enabled) | `you@your-domain.com` | Mailbox user delegated to the service account |
 | `GMAIL_SEARCH_QUERY` | No | `label:job-alerts is:unread` | Default shown; override to restrict scope |
-| `INDEED_GMAIL_SEARCH_QUERY` | No | `from:jobalerts-noreply@indeed.com is:unread` | Used by the Indeed alert adapter |
 | `SLACK_WEBHOOK_URL` | Yes (if Slack enabled) | `https://hooks.slack.com/services/T.../B.../xxx` | Incoming webhook URL from Slack app |
 | `SETTINGS_ENCRYPTION_KEY` | Yes, if saving secrets from Settings UI | output of `openssl rand -base64 32` | Encrypts secret settings in PostgreSQL |
 
@@ -494,7 +490,7 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 # GMAIL_CREDENTIALS_JSON=
 # GMAIL_USER_EMAIL=you@your-domain.com
 # GMAIL_SEARCH_QUERY=label:job-alerts is:unread
-# INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
+# GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 
 # Slack Integration
 # SLACK_WEBHOOK_URL=
@@ -504,20 +500,20 @@ The orchestrator constructor does **not** change. Reporters are called sequentia
 
 ### 3.8 Source Policy Alignment
 
-The current source policies include Reed, Gmail Alerts, Indeed UK, and Indeed Direct. Gmail-backed adapters must use the same source names as those policies so `SourcePolicyGuard.CanFetch()` allows them through.
+The current source policies include Reed, Gmail Alerts, Indeed Direct, and Indeed Direct. Gmail-backed adapters must use the same source names as those policies so `SourcePolicyGuard.CanFetch()` allows them through.
 
 ```mermaid
 flowchart LR
     A["SourcePolicy('Gmail Alerts', AlertInbox, Enabled=true)"] --> B{SourcePolicyGuard}
     C["GmailAlertJobSourceAdapter\nSourceName='Gmail Alerts'"] --> B
-    D["SourcePolicy('Indeed UK', AlertInbox, Enabled=true)"] --> B
-    E["IndeedAlertJobSourceAdapter\nSourceName='Indeed UK'"] --> B
+    D["SourcePolicy('Indeed Direct', AlertInbox, Enabled=true)"] --> B
+    E["IndeedDirectJobSourceAdapter\nSourceName='Indeed Direct'"] --> B
     F["SourcePolicy('Indeed Direct', McpPlugin, Enabled=true)"] --> B
     G["IndeedDirectJobSourceAdapter\nSourceName='Indeed Direct'"] --> B
     B --> H["CanFetch -> Allowed"]
 ```
 
-**Note:** Gmail-backed adapters return jobs only for their configured policy source. `GmailAlertJobSourceAdapter` reports generic Gmail alerts and `IndeedAlertJobSourceAdapter` reports Indeed UK alerts. `IndeedDirectJobSourceAdapter` is not Gmail-backed; it returns only jobs previously injected through `jobs.ingest_indeed`.
+**Note:** Gmail-backed adapters return jobs only for their configured policy source. `GmailAlertJobSourceAdapter` reports generic Gmail alerts and `IndeedDirectJobSourceAdapter` reports Indeed Direct alerts. `IndeedDirectJobSourceAdapter` is not Gmail-backed; it returns only jobs previously injected through `jobs.ingest_indeed`.
 
 **Decision:** Register one adapter per provider. Simpler policy matching, clearer error reporting.
 
@@ -569,7 +565,7 @@ flowchart LR
 
 | # | Risk | Mitigation |
 |---|------|-----------|
-| R-1 | Gmail / Indeed alert email HTML structure changes | Parser behavior is isolated per adapter. Only one source breaks at a time. Add a `Warnings` entry to `SourceFetchResult` when parse yields 0 jobs from a non-empty body. |
+| R-1 | Gmail / Indeed Direct ingestion HTML structure changes | Parser behavior is isolated per adapter. Only one source breaks at a time. Add a `Warnings` entry to `SourceFetchResult` when parse yields 0 jobs from a non-empty body. |
 | R-2 | Gmail service-account credentials revoked or invalid | `GoogleCredentialProvider` catches auth errors and returns them as a `SourceFetchResult` with an empty job list and a descriptive warning. Does not throw. |
 | R-3 | Slack rate limit (max 1 msg/sec per webhook) | Single POST per run. No pagination needed unless > 50 matches, which is unlikely given score threshold. |
 | R-4 | Gmail `users.messages.list` returns thousands of emails | Apply `maxResults=50` to the list call. The query `is:unread` and label scoping keeps the list small in practice. Mark as read after processing to prevent re-processing. |

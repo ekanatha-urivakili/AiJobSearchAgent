@@ -45,7 +45,6 @@ A search run can be triggered three ways:
 |---|---|---|
 | **Reed** | Reed Job Search API (`/api/1.0/search`) | `REED_API_KEY` configured |
 | **Gmail Alerts** | Reads unread emails via Google service account | `GMAIL_CREDENTIALS_JSON` + `GMAIL_USER_EMAIL` |
-| **Indeed UK** | Same Gmail mailbox, Indeed alert email format | `GMAIL_CREDENTIALS_JSON` + `GMAIL_USER_EMAIL` |
 | **Indeed Direct** | In-memory buffer filled by `POST /api/jobs/ingest_indeed` | Buffer non-empty |
 | **Dice / ZipRecruiter** | In-memory buffers via MCP tool calls | Buffer non-empty |
 
@@ -108,7 +107,6 @@ The React dashboard at `http://localhost:5173` shows:
 - `.NET 10` worker with daily scheduler (Europe/London timezone)
 - Reed API job source adapter (live)
 - Gmail job alert source adapter — reads job alert emails via Google service account credentials (live)
-- Indeed alert email adapter — parses Indeed alerts from the delegated Gmail mailbox (live)
 - Indeed Direct MCP ingestion — accepts normalized jobs fetched by an external MCP plugin into an in-memory source buffer
 - Source policy guard — per-source enable/disable and rate limiting
 - Deterministic filter engine — salary, day rate, location, title, recency
@@ -153,7 +151,6 @@ flowchart TD
     subgraph Sources
         ReedAdapter["Reed API Adapter"]
         GmailAdapter["GmailAlertJobSourceAdapter\n(Google.Apis.Gmail.v1)"]
-        IndeedAdapter["IndeedAlertJobSourceAdapter\n(Indeed alert emails via Gmail)"]
         IndeedDirect["IndeedDirectJobSourceAdapter\n(in-memory MCP ingest buffer)"]
     end
 
@@ -182,7 +179,6 @@ flowchart TD
     Orchestrator --> PolicyGuard
     Orchestrator --> ReedAdapter
     Orchestrator --> GmailAdapter
-    Orchestrator --> IndeedAdapter
     Orchestrator --> IndeedDirect
     Orchestrator --> FilterEngine
     FilterEngine --> Scorer
@@ -191,7 +187,6 @@ flowchart TD
     Dedup --> SlackReporter
 
     GmailAdapter --> Gmail[("Gmail API")]
-    IndeedAdapter --> Gmail
     McpClient -- "jobs.ingest_indeed" --> StdioMcp
     ReedAdapter --> ReedAPI[("Reed API")]
     SlackReporter --> Slack[("Slack Webhook")]
@@ -326,7 +321,6 @@ sequenceDiagram
 | Time zone | `Europe/London` | `JOB_SEARCH_TIME_ZONE` |
 | Run time | `10:00` | `JOB_SEARCH_RUN_AT` |
 | Gmail mailbox user | _(none)_ | `GMAIL_USER_EMAIL` |
-| Indeed alert query | `from:jobalerts-noreply@indeed.com is:unread` | `INDEED_GMAIL_SEARCH_QUERY` |
 
 `JOB_SEARCH_DESIRED_DESIGNATION` and `JOB_SEARCH_SKILLS` are configurable from the **Job Profile** section of the Settings page. Both accept comma-separated values and fall back to built-in defaults when not set.
 
@@ -424,18 +418,6 @@ label:jobs -label:applied
 
 Default is `label:job-alerts is:unread`. Override this to narrow or broaden which emails are parsed for job postings.
 
-### Indeed Job Alert Emails
-
-Indeed job alerts are ingested from your Gmail inbox using the same service account as the Gmail adapter. Set up a saved search on Indeed and enable email job alerts for your account.
-
-Set `INDEED_GMAIL_SEARCH_QUERY` to target Indeed alert emails specifically:
-
-```
-INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
-```
-
-The adapter extracts the stable Indeed job key (`jk` parameter) from each alert link and maps it to a canonical `https://uk.indeed.com/viewjob?jk=...` URL. Salary, location, employment type, and description are parsed from the email HTML. If `GMAIL_CREDENTIALS_JSON` and `GMAIL_USER_EMAIL` are configured, Indeed is automatically enabled.
-
 ### Indeed Direct MCP Ingestion
 
 `jobs.ingest_indeed` is an MCP/HTTP ingestion path for jobs fetched by an external Indeed MCP plugin. The caller maps plugin results into `IndeedJobInput`; the server stores them in the `Indeed Direct` in-memory adapter. A later `jobs.search` can include `sources=["Indeed Direct"]`, or omit `sources` to include it with the other configured sources.
@@ -452,7 +434,6 @@ The React dashboard includes a **Settings** screen where you can configure:
 - `REED_API_KEY`.
 - Slack webhook URL.
 - Gmail service-account JSON, delegated mailbox user, and Gmail search query.
-- Indeed Gmail alert query.
 
 `GET /api/config` returns saved values plus defaults, but secret values are masked in API responses. Blank secret fields preserve existing saved secrets.
 
@@ -572,7 +553,6 @@ SLACK_WEBHOOK_URL=<redacted>
 GMAIL_CREDENTIALS_JSON=<redacted>
 GMAIL_USER_EMAIL=you@your-domain.com
 GMAIL_SEARCH_QUERY=label:job-alerts is:unread
-INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
 JOB_AGENT_HTTP_HOST=localhost
 JOB_AGENT_API_KEY=<set when exposing the HTTP API beyond localhost>
 ```

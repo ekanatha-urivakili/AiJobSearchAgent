@@ -13,7 +13,7 @@ export const jobResults: JobResult[] = [
     url: "https://www.reed.co.uk/jobs/senior-fullstack-engineer-jobs",
   },
   {
-    id: "indeed-002", sourceJobId: "002", source: "Indeed UK",
+    id: "indeed-002", sourceJobId: "002", source: "Indeed Direct",
     title: "Lead Software Engineer", company: "E-Commerce Scale-up",
     location: "London", distanceMiles: 47,
     employmentType: "Contract", workMode: "Remote",

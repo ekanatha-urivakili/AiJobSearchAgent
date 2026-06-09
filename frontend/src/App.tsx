@@ -916,17 +916,6 @@ function SettingsPage(): ReactElement {
             </div>
           </div>
 
-          <div className="settings-section">
-            <div className="settings-section-title">Indeed Alert Emails</div>
-            <div className="settings-body">
-              <div className="form-field">
-                <label>Indeed Gmail Search Query</label>
-                <input placeholder="from:jobalerts-noreply@indeed.com is:unread"
-                  value={config["INDEED_GMAIL_SEARCH_QUERY"] ?? ""} onChange={set("INDEED_GMAIL_SEARCH_QUERY")} />
-              </div>
-            </div>
-          </div>
-
           <div className="settings-actions">
             <button className="save-btn" type="submit" disabled={saving}>
               {saving ? "Saving…" : "Save Configuration"}

@@ -86,6 +86,5 @@ CREATE TABLE IF NOT EXISTS source_policies (
 INSERT INTO source_policies (source_name, fetch_mode, enabled, minimum_delay_seconds, last_reviewed_on)
 VALUES
     ('Reed', 'ApprovedApi', TRUE, 3, DATE '2026-06-03'),
-    ('Gmail Alerts', 'AlertInbox', TRUE, 0, DATE '2026-06-03'),
-    ('Indeed UK', 'AlertInbox', FALSE, 10, DATE '2026-06-03')
+    ('Gmail Alerts', 'AlertInbox', TRUE, 0, DATE '2026-06-03')
 ON CONFLICT (source_name) DO NOTHING;

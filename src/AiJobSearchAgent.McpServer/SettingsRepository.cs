@@ -34,7 +34,6 @@ public sealed class SettingsRepository
             "GMAIL_CREDENTIALS_JSON",
             "GMAIL_USER_EMAIL",
             "GMAIL_SEARCH_QUERY",
-            "INDEED_GMAIL_SEARCH_QUERY",
             "JOB_SEARCH_DESIRED_DESIGNATION",
             "JOB_SEARCH_SKILLS",
         };
@@ -45,7 +44,6 @@ public sealed class SettingsRepository
         "REED_API_KEY",
         "GMAIL_CREDENTIALS_JSON",
         "SLACK_WEBHOOK_URL",
-        "INDEED_GMAIL_SEARCH_QUERY",
         "GMAIL_SEARCH_QUERY",
     };
 

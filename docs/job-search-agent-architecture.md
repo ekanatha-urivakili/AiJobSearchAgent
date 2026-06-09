@@ -138,7 +138,6 @@ flowchart TD
 | Worker | Daily scheduled runs and local reports. | Live |
 | Reed Adapter | Fetches and maps jobs from Reed API. | Live |
 | Gmail Adapter | Reads Gmail job alerts using configured service account JSON. | Live |
-| Indeed Adapter | Parses Indeed alert emails from Gmail. | Live |
 | Indeed Direct Adapter | Holds normalized jobs injected through `jobs.ingest_indeed` in process memory. | Live |
 | Deduplicator | Ensures unique results by source job ID. | Live |
 
@@ -222,7 +221,7 @@ sequenceDiagram
     Server->>Orchestrator: RunAsync(Criteria)
     Orchestrator->>Reed: FetchAsync
     Reed-->>Orchestrator: JobPostings
-    Orchestrator->>Gmail: FetchAsync (Gmail + Indeed alerts)
+    Orchestrator->>Gmail: FetchAsync (Gmail alerts)
     Gmail-->>Orchestrator: JobPostings
     Orchestrator->>Direct: FetchAsync (Indeed Direct)
     Direct-->>Orchestrator: JobPostings

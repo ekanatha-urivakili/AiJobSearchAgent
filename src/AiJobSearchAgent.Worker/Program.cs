@@ -46,7 +46,6 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     var gmailCreds  = GetSecret("GMAIL_CREDENTIALS_JSON");
     var gmailUser   = GetSecret("GMAIL_USER_EMAIL");
     var gmailQuery  = GetSecret("GMAIL_SEARCH_QUERY")        ?? "label:job-alerts is:unread";
-    var indeedQuery = GetSecret("INDEED_GMAIL_SEARCH_QUERY") ?? "from:jobalerts-noreply@indeed.com is:unread";
     var slackUrl    = GetSecret("SLACK_WEBHOOK_URL");
 
     // ── adapters ──────────────────────────────────────────────────────────────
@@ -67,14 +66,10 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     {
         sources.Add(new GmailAlertJobSourceAdapter(gmailCreds, gmailQuery, gmailUser));
         Console.WriteLine("[source] Gmail Alerts: enabled");
-
-        sources.Add(new IndeedAlertJobSourceAdapter(gmailCreds, indeedQuery, gmailUser));
-        Console.WriteLine("[source] Indeed UK (alert emails): enabled");
     }
     else
     {
         Console.WriteLine("[source] Gmail Alerts: skipped (GMAIL_CREDENTIALS_JSON or GMAIL_USER_EMAIL not set)");
-        Console.WriteLine("[source] Indeed UK:    skipped (GMAIL_CREDENTIALS_JSON or GMAIL_USER_EMAIL not set)");
     }
 
     if (sources.Count == 0)
@@ -88,8 +83,7 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
     var policies = new List<SourcePolicy>
     {
         new("Reed",         FetchMode.ApprovedApi, !string.IsNullOrWhiteSpace(reedKey),    TimeSpan.FromSeconds(3),  new DateOnly(2026, 6, 3)),
-        new("Gmail Alerts", FetchMode.AlertInbox,  gmailConfigured, TimeSpan.FromSeconds(0),  new DateOnly(2026, 6, 3)),
-        new("Indeed UK",    FetchMode.AlertInbox,  gmailConfigured, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3))
+        new("Gmail Alerts", FetchMode.AlertInbox,  gmailConfigured, TimeSpan.FromSeconds(0),  new DateOnly(2026, 6, 3))
     };
 
     // ── run ───────────────────────────────────────────────────────────────────

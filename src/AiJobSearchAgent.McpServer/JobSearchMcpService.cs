@@ -124,7 +124,6 @@ public sealed class JobSearchMcpService
             {
                 var s when s.Equals("Reed", StringComparison.OrdinalIgnoreCase) => "REED_API_KEY",
                 var s when s.Equals("Gmail Alerts", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
-                var s when s.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase) => "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL",
                 var s when s.Equals("Indeed Direct", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_indeed before jobs.search",
                 var s when s.Equals("Dice", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_dice before jobs.search",
                 var s when s.Equals("ZipRecruiter", StringComparison.OrdinalIgnoreCase) => "Call jobs.ingest_ziprecruiter before jobs.search",
@@ -275,7 +274,6 @@ public sealed class JobSearchMcpService
     [
         new("Reed", FetchMode.ApprovedApi, Enabled: !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY")), TimeSpan.FromSeconds(3), new DateOnly(2026, 6, 1)),
         new("Gmail Alerts", FetchMode.AlertInbox, Enabled: HasGmailConfiguration(), TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 3)),
-        new("Indeed UK", FetchMode.AlertInbox, Enabled: HasGmailConfiguration(), TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
         new("Indeed Direct", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4)),
         new("Dice", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4)),
         new("ZipRecruiter", FetchMode.McpPlugin, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 4))
@@ -310,16 +308,6 @@ public sealed class JobSearchMcpService
         if (selectedSources.Contains("ZipRecruiter"))
             yield return zipRecruiterAdapter;
 
-        if (selectedSources.Contains("Indeed UK") || selectedSources.Contains("Indeed"))
-        {
-            var credJson = credentials.GetSecret("GMAIL_CREDENTIALS_JSON");
-            var userEmail = credentials.GetSecret("GMAIL_USER_EMAIL");
-            var indeedQuery = credentials.GetSecret("INDEED_GMAIL_SEARCH_QUERY")
-                ?? "from:jobalerts-noreply@indeed.com is:unread";
-            yield return !HasGmailConfiguration()
-                ? new PolicyBlockedSourceAdapter("Indeed UK", "GMAIL_CREDENTIALS_JSON and GMAIL_USER_EMAIL are required.")
-                : new IndeedAlertJobSourceAdapter(credJson, indeedQuery, userEmail);
-        }
     }
 
     private bool SourceHasRequiredConfiguration(string sourceName)
@@ -329,8 +317,7 @@ public sealed class JobSearchMcpService
             return !string.IsNullOrWhiteSpace(credentials.GetSecret("REED_API_KEY"));
         }
 
-        if (sourceName.Equals("Gmail Alerts", StringComparison.OrdinalIgnoreCase)
-            || sourceName.Equals("Indeed UK", StringComparison.OrdinalIgnoreCase))
+        if (sourceName.Equals("Gmail Alerts", StringComparison.OrdinalIgnoreCase))
         {
             return HasGmailConfiguration();
         }
