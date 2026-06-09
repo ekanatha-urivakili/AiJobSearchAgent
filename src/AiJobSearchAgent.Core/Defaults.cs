@@ -10,6 +10,9 @@ public static class Defaults
         var minSalary = decimal.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_PERMANENT_SALARY_GBP"), out var s) ? s : 75000m;
         var minRate = decimal.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP"), out var d) ? d : 400m;
         var minMonths = int.TryParse(Environment.GetEnvironmentVariable("JOB_SEARCH_MIN_CONTRACT_MONTHS"), out var m) ? m : 6;
+        var excludedKeywords = ReadCsv(
+            Environment.GetEnvironmentVariable("JOB_SEARCH_EXCLUDED_KEYWORDS"),
+            ["graduate", "junior", "java only", "onsite 5 days", "5 days onsite", "sc clearance"]);
 
         var defaultTitles = new[]
         {
@@ -22,9 +25,7 @@ public static class Defaults
             "Principal Developer"
         };
         var designationEnv = Environment.GetEnvironmentVariable("JOB_SEARCH_DESIRED_DESIGNATION");
-        var titles = !string.IsNullOrWhiteSpace(designationEnv)
-            ? designationEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            : defaultTitles;
+        var titles = ReadCsv(designationEnv, defaultTitles);
 
         return new(
             Titles: titles,
@@ -36,7 +37,8 @@ public static class Defaults
             WorkModes: [WorkMode.Remote, WorkMode.Hybrid, WorkMode.Office],
             MinimumPermanentSalary: Money.Gbp(minSalary),
             MinimumContractDayRate: Money.Gbp(minRate),
-            MinimumContractMonths: minMonths);
+            MinimumContractMonths: minMonths,
+            ExcludedKeywords: excludedKeywords);
     }
 
     public static CvProfile CreateCvProfile()
@@ -89,4 +91,9 @@ public static class Defaults
         new("Indeed UK", FetchMode.AlertInbox, Enabled: false, TimeSpan.FromSeconds(10), new DateOnly(2026, 6, 3)),
         new("Gmail Alerts", FetchMode.AlertInbox, Enabled: true, TimeSpan.FromSeconds(0), new DateOnly(2026, 6, 2))
     ];
+
+    private static string[] ReadCsv(string? value, string[] fallback) =>
+        !string.IsNullOrWhiteSpace(value)
+            ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : fallback;
 }

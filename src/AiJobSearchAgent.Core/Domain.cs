@@ -37,7 +37,8 @@ public sealed record JobSearchCriteria(
     IReadOnlyCollection<WorkMode> WorkModes,
     Money MinimumPermanentSalary,
     Money MinimumContractDayRate,
-    int MinimumContractMonths);
+    int MinimumContractMonths,
+    IReadOnlyCollection<string> ExcludedKeywords);
 
 public sealed record CvProfile(
     string Name,

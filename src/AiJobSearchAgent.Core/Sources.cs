@@ -3,8 +3,21 @@ using Google.Apis.Gmail.v1;
 using Google.Apis.Gmail.v1.Data;
 using Google.Apis.Services;
 using HtmlAgilityPack;
+using System.Text;
 
 namespace AiJobSearchAgent.Core;
+
+internal static class GmailCredentialFactory
+{
+    public static GoogleCredential CreateDelegated(string credentialsJson, string mailbox)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(credentialsJson));
+        var serviceAccount = ServiceAccountCredential.FromServiceAccountData(stream);
+        return serviceAccount.ToGoogleCredential()
+            .CreateScoped(GmailService.Scope.GmailReadonly)
+            .CreateWithUser(mailbox);
+    }
+}
 
 public interface IJobSourceAdapter
 {
@@ -68,9 +81,7 @@ public sealed class GmailAlertJobSourceAdapter : IJobSourceAdapter
         try
         {
             var mailbox = userEmail.Trim();
-            var credential = GoogleCredential.FromJson(credentialsJson)
-                .CreateScoped(GmailService.Scope.GmailReadonly)
-                .CreateWithUser(mailbox);
+            var credential = GmailCredentialFactory.CreateDelegated(credentialsJson, mailbox);
 
             var service = new GmailService(new BaseClientService.Initializer
             {
@@ -273,9 +284,7 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
         try
         {
             var mailbox = userEmail.Trim();
-            var credential = GoogleCredential.FromJson(credentialsJson)
-                .CreateScoped(GmailService.Scope.GmailReadonly)
-                .CreateWithUser(mailbox);
+            var credential = GmailCredentialFactory.CreateDelegated(credentialsJson, mailbox);
 
             var service = new GmailService(new BaseClientService.Initializer
             {
@@ -464,6 +473,12 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
                 max = maxVal;
         }
 
+        if (match.Value.Contains('k', StringComparison.OrdinalIgnoreCase))
+        {
+            min *= 1000;
+            if (max.HasValue) max *= 1000;
+        }
+
         var period = match.Groups[3].Value.ToLowerInvariant();
         var isDayRate = period.Contains("day");
 
@@ -526,6 +541,7 @@ public sealed class IndeedAlertJobSourceAdapter : IJobSourceAdapter
         var data = Convert.FromBase64String(base64.Replace('-', '+').Replace('_', '/'));
         return System.Text.Encoding.UTF8.GetString(data);
     }
+
 }
 
 /// <summary>

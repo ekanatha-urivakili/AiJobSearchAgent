@@ -19,6 +19,12 @@ public sealed class JobFilterEngine
             return new(false, "Work mode mismatch");
         }
 
+        var excludedKeyword = FindExcludedKeyword(job, criteria.ExcludedKeywords);
+        if (excludedKeyword is not null)
+        {
+            return new(false, $"Excluded keyword: {excludedKeyword}");
+        }
+
         if (!IsTitleMatch(job.Title, criteria.Titles))
         {
             return new(false, "Title mismatch");
@@ -79,4 +85,12 @@ public sealed class JobFilterEngine
     }
 
     private static string Normalize(string value) => value.Trim().ToLowerInvariant().Replace("-", " ");
+
+    private static string? FindExcludedKeyword(JobPosting job, IReadOnlyCollection<string> excludedKeywords)
+    {
+        var haystack = Normalize($"{job.Title} {job.Description}");
+        return excludedKeywords
+            .Select(Normalize)
+            .FirstOrDefault(keyword => keyword.Length > 0 && haystack.Contains(keyword, StringComparison.Ordinal));
+    }
 }

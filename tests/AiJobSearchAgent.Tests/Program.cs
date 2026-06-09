@@ -10,6 +10,7 @@ var tests = new (string Name, Action Test)[]
     ("Jobs with same source and source ID are deduplicated, newest kept", DeduplicationUsesSourceJobId),
     ("Jobs from different sources with same source ID are not merged", DifferentSourcesSameIdNotMerged),
     ("Title matching works against criteria titles with partial contains", TitleMatchingWorksByContains),
+    ("Excluded keywords reject noisy roles", ExcludedKeywordsRejectNoisyRoles),
     ("Old postings outside date range are rejected", OldPostingIsRejected),
     ("Office jobs outside radius are rejected", OfficeJobOutsideRadiusIsRejected),
     ("CV scorer penalises jobs with few keyword matches", LowKeywordMatchIsNotRecommended),
@@ -21,6 +22,8 @@ var tests = new (string Name, Action Test)[]
     ("Indeed adapter extracts job key from rc/clk URL", IndeedAdapterExtractsJobKeyFromRedirectUrl),
     ("Indeed adapter parses jobs from alert email HTML fixture", IndeedAdapterParsesJobsFromEmailFixture),
     ("Indeed adapter parses day-rate salary as contract", IndeedAdapterParsesDayRateSalaryAsContract),
+    ("Indeed adapter parses k salaries as thousands", IndeedAdapterParsesKSalaryAsThousands),
+    ("CV scorer uses supplied search date for freshness", CvScorerUsesSuppliedSearchDate),
 };
 
 var failures = new List<string>();
@@ -146,6 +149,16 @@ static void LowKeywordMatchIsNotRecommended()
     AssertFalse(match.Recommended);
 }
 
+static void CvScorerUsesSuppliedSearchDate()
+{
+    var job = CreateJobOnDate(new DateOnly(2026, 6, 6), EmploymentType.Permanent, WorkMode.Hybrid, salaryMin: 85000);
+
+    var fresh = new CvMatchScorer(new DateOnly(2026, 6, 9)).Score(job, Defaults.CreateCvProfile());
+    var stale = new CvMatchScorer(new DateOnly(2026, 6, 10)).Score(job, Defaults.CreateCvProfile());
+
+    AssertEqual(stale.Score + 2, fresh.Score);
+}
+
 // ── deduplication tests ───────────────────────────────────────────────────────
 
 static void DeduplicationUsesSourceJobId()
@@ -217,6 +230,29 @@ static void TitleMatchingWorksByContains()
     var nonMatchingDecision = filter.Evaluate(nonMatchingJob, criteria);
     AssertFalse(nonMatchingDecision.Accepted);
     AssertEqual("Title mismatch", nonMatchingDecision.Reason);
+}
+
+static void ExcludedKeywordsRejectNoisyRoles()
+{
+    var criteria = Defaults.CreateCriteria(new DateOnly(2026, 5, 30));
+    var job = new JobPosting(
+        "Test",
+        Guid.NewGuid().ToString("N"),
+        new Uri("https://example.com/job"),
+        "Senior Software Engineer",
+        "Example Ltd",
+        "Milton Keynes",
+        10,
+        EmploymentType.Permanent,
+        WorkMode.Hybrid,
+        85000, 95000, null, null, null,
+        criteria.PostedTo.AddDays(-1),
+        "C# ASP.NET Core role. SC clearance required.");
+
+    var decision = new JobFilterEngine().Evaluate(job, criteria);
+
+    AssertFalse(decision.Accepted);
+    AssertEqual("Excluded keyword: sc clearance", decision.Reason);
 }
 
 static void SlackReporterSkipsWhenUrlIsNull()
@@ -345,6 +381,15 @@ static void IndeedAdapterParsesDayRateSalaryAsContract()
     var (min2, _, isDayRate2) = IndeedAlertJobSourceAdapter.ExtractSalary("£85,000 - £95,000 a year");
     AssertTrue(!isDayRate2);
     AssertEqual(85000m, min2!.Value);
+}
+
+static void IndeedAdapterParsesKSalaryAsThousands()
+{
+    var (min, max, isDayRate) = IndeedAlertJobSourceAdapter.ExtractSalary("£80k - £95k a year");
+
+    AssertFalse(isDayRate);
+    AssertEqual(80000m, min!.Value);
+    AssertEqual(95000m, max!.Value);
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

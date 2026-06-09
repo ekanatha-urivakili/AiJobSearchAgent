@@ -4,10 +4,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Builder;
+using System.Security.Cryptography;
 
 // --http flag: start the HTTP API for the frontend dashboard (no MCP STDIO transport).
 // Default (no flag): run as a local STDIO MCP server for AI clients.
 var isHttpMode = args.Contains("--http", StringComparer.OrdinalIgnoreCase);
+const long MaxCvUploadMegabytes = 5;
+const long MaxCvUploadBytes = MaxCvUploadMegabytes * 1024 * 1024;
 
 if (isHttpMode)
 {
@@ -36,8 +39,9 @@ static async Task RunHttpAsync(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    var port = Environment.GetEnvironmentVariable("PORT") ?? "5005";
-    builder.WebHost.UseUrls($"http://*:{port}");
+    var port = Environment.GetEnvironmentVariable("PORT") ?? "5001";
+    var host = Environment.GetEnvironmentVariable("JOB_AGENT_HTTP_HOST") ?? "localhost";
+    builder.WebHost.UseUrls($"http://{host}:{port}");
 
     RegisterShared(builder.Services);
 
@@ -50,13 +54,25 @@ static async Task RunHttpAsync(string[] args)
 
     var app = builder.Build();
 
-    // Force the minimal API to listen on localhost:5001 to avoid conflicts with system services on :5000
-    app.Urls.Add("http://localhost:5001");
     app.UseCors("Frontend");
+
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path.StartsWithSegments("/api") && !IsApiAuthorized(context))
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new { message = "Unauthorized." });
+            return;
+        }
+
+        await next();
+    });
 
     // Ensure the app_settings table exists (idempotent, safe to run on every start)
     var settings = app.Services.GetRequiredService<SettingsRepository>();
     await settings.EnsureSchemaAsync();
+    var jobRuns = app.Services.GetRequiredService<JobRunRepository>();
+    await jobRuns.EnsureSchemaAsync();
     await ApplySettingsToEnvironmentAsync(settings, CancellationToken.None);
 
     // Returns the cached result from the last search run without triggering a new one.
@@ -86,6 +102,27 @@ static async Task RunHttpAsync(string[] args)
     app.MapGet("/api/jobs/{source}/{sourceJobId}", async (string source, string sourceJobId, JobSearchMcpService service, CancellationToken ct) =>
     {
         var response = await service.GetJobAsync(source, sourceJobId, ct);
+        return Results.Ok(response);
+    });
+
+    app.MapGet("/api/jobs/{source}/{sourceJobId}/application", async (string source, string sourceJobId, JobRunRepository db, CancellationToken ct) =>
+    {
+        var response = await db.GetApplicationAsync(source, sourceJobId, ct)
+            ?? new JobApplicationDto(source, sourceJobId, "New", string.Empty, DateTimeOffset.UtcNow);
+        return Results.Ok(response);
+    });
+
+    app.MapPost("/api/jobs/{source}/{sourceJobId}/application", async (string source, string sourceJobId, SaveJobApplicationRequest request, JobRunRepository db, CancellationToken ct) =>
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "New", "Interested", "Applied", "FollowUp", "Interview", "Rejected", "Offer"
+        };
+
+        if (!allowed.Contains(request.Status))
+            return Results.BadRequest(new { message = "Unknown application status." });
+
+        var response = await db.SaveApplicationAsync(source, sourceJobId, request.Status, request.Notes, ct);
         return Results.Ok(response);
     });
 
@@ -165,9 +202,15 @@ static async Task RunHttpAsync(string[] args)
         if (file is null || file.Length == 0)
             return Results.BadRequest(new { message = "Select a CV file to upload." });
 
+        if (file.Length > MaxCvUploadBytes)
+            return Results.BadRequest(new { message = $"CV must be {MaxCvUploadMegabytes} MB or smaller." });
+
         var originalName = SanitiseCvFileName(file.FileName);
         if (!IsAllowedCvName(originalName))
             return Results.BadRequest(new { message = "Only .pdf, .docx, and .md files are allowed." });
+
+        if (!await HasAllowedCvContentAsync(file, originalName, ct))
+            return Results.BadRequest(new { message = "CV content does not match the file extension." });
 
         var mode = form["mode"].ToString();
         var requestedName = form["targetName"].ToString();
@@ -286,6 +329,55 @@ static bool IsAllowedCvName(string name)
         || extension.Equals(".md", StringComparison.OrdinalIgnoreCase);
 }
 
+static bool IsApiAuthorized(HttpContext context)
+{
+    var expected = Environment.GetEnvironmentVariable("JOB_AGENT_API_KEY")
+        ?? ReadEnvFile().GetValueOrDefault("JOB_AGENT_API_KEY");
+    if (string.IsNullOrWhiteSpace(expected))
+        return IsLoopback(context.Connection.RemoteIpAddress);
+
+    var supplied = context.Request.Headers["X-Job-Agent-Key"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(supplied))
+    {
+        var auth = context.Request.Headers.Authorization.FirstOrDefault();
+        const string bearerPrefix = "Bearer ";
+        if (auth?.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase) == true)
+            supplied = auth[bearerPrefix.Length..];
+    }
+
+    return FixedTimeEquals(expected, supplied);
+}
+
+static bool IsLoopback(System.Net.IPAddress? address) =>
+    address is null || System.Net.IPAddress.IsLoopback(address);
+
+static bool FixedTimeEquals(string expected, string? supplied)
+{
+    if (string.IsNullOrEmpty(supplied)) return false;
+    var expectedBytes = System.Text.Encoding.UTF8.GetBytes(expected);
+    var suppliedBytes = System.Text.Encoding.UTF8.GetBytes(supplied);
+    return expectedBytes.Length == suppliedBytes.Length
+        && CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes);
+}
+
+static async Task<bool> HasAllowedCvContentAsync(IFormFile file, string fileName, CancellationToken ct)
+{
+    var extension = Path.GetExtension(fileName);
+    await using var stream = file.OpenReadStream();
+    var buffer = new byte[Math.Min(512, (int)file.Length)];
+    var read = await stream.ReadAsync(buffer, ct);
+    var header = buffer.AsSpan(0, read);
+
+    if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+        return header.StartsWith("%PDF-"u8);
+
+    if (extension.Equals(".docx", StringComparison.OrdinalIgnoreCase))
+        return header.StartsWith("PK"u8);
+
+    return extension.Equals(".md", StringComparison.OrdinalIgnoreCase)
+        && !header.Contains((byte)0);
+}
+
 static void RegisterShared(IServiceCollection services)
 {
     services.AddSingleton(TimeProvider.System);
@@ -297,6 +389,11 @@ static void RegisterShared(IServiceCollection services)
         var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL");
         var encryptionKey    = Environment.GetEnvironmentVariable("SETTINGS_ENCRYPTION_KEY");
         return new SettingsRepository(connectionString, encryptionKey);
+    });
+    services.AddSingleton(sp =>
+    {
+        var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL");
+        return new JobRunRepository(connectionString);
     });
 }
 

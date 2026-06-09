@@ -21,6 +21,7 @@ public sealed class SettingsRepository
             ["JOB_SEARCH_MIN_PERMANENT_SALARY_GBP"] = "75000",
             ["JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP"] = "400",
             ["JOB_SEARCH_MIN_CONTRACT_MONTHS"] = "6",
+            ["JOB_SEARCH_EXCLUDED_KEYWORDS"] = "graduate,junior,java only,onsite 5 days,5 days onsite,sc clearance",
             ["JOB_SEARCH_DESIRED_DESIGNATION"] = "Senior Software Engineer,Lead Developer,Principal Engineer,Senior Fullstack Engineer,Senior Software Developer,Lead Software Engineer,Principal Developer",
             ["JOB_SEARCH_SKILLS"] = "c#,asp.net core,web api,react,typescript,javascript,php,aws,docker,sql server,postgresql,mysql,mongodb,microservices,cqrs,rest",
             ["REED_API_KEY"] = string.Empty,
@@ -60,14 +61,13 @@ public sealed class SettingsRepository
             try
             {
                 var raw = Convert.FromBase64String(encryptionKeyBase64);
-                // AES-256 needs exactly 32 bytes; pad or truncate to be safe
-                encryptionKey = new byte[32];
-                Buffer.BlockCopy(raw, 0, encryptionKey, 0, Math.Min(raw.Length, 32));
+                if (raw.Length != 32)
+                    throw new InvalidOperationException("SETTINGS_ENCRYPTION_KEY must decode to exactly 32 bytes.");
+                encryptionKey = raw;
             }
-            catch
+            catch (Exception ex)
             {
-                // Invalid base64 — log and continue without encryption key
-                Console.Error.WriteLine("[settings] SETTINGS_ENCRYPTION_KEY is not valid base64; values will not be encrypted.");
+                Console.Error.WriteLine($"[settings] SETTINGS_ENCRYPTION_KEY is invalid: {ex.Message}");
             }
         }
     }

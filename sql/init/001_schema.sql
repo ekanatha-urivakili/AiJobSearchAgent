@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS job_seen_history (
     UNIQUE (job_posting_id, content_hash)
 );
 
+CREATE TABLE IF NOT EXISTS job_applications (
+    source TEXT NOT NULL,
+    source_job_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source, source_job_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_job_postings_last_seen_at ON job_postings (last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS ix_job_matches_search_run_id ON job_matches (search_run_id);
+
 CREATE TABLE IF NOT EXISTS source_policies (
     source_name TEXT PRIMARY KEY,
     fetch_mode TEXT NOT NULL,

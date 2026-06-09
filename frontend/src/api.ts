@@ -1,6 +1,11 @@
-import type { CvFile, EmploymentType, JobDetail, JobResult, SourceStatus, WorkMode } from "./types";
+import type { ApplicationStatus, CvFile, EmploymentType, JobApplication, JobDetail, JobResult, SourceStatus, WorkMode } from "./types";
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:5001";
+const API_KEY = import.meta.env.VITE_JOB_AGENT_API_KEY as string | undefined;
+
+function authHeaders(): HeadersInit {
+  return API_KEY ? { "X-Job-Agent-Key": API_KEY } : {};
+}
 
 /* ── raw DTO shapes ──────────────────────────────────────────────────────── */
 
@@ -72,7 +77,7 @@ export type FetchResult =
 
 export async function fetchMatches(): Promise<FetchResult> {
   try {
-    const res = await fetch(`${BASE_URL}/api/jobs/results`);
+    const res = await fetch(`${BASE_URL}/api/jobs/results`, { headers: authHeaders() });
     if (!res.ok) return { status: "error", message: `API ${res.status} ${res.statusText}` };
     const data: JobMatchDto[] | SearchResponse = await res.json();
     // Handle both old array response and new SearchResponse shape
@@ -94,7 +99,7 @@ export type DetailResult = { status: "ok"; job: JobDetail } | { status: "error";
 
 export async function fetchJobDetail(source: string, sourceJobId: string): Promise<DetailResult> {
   try {
-    const res = await fetch(`${BASE_URL}/api/jobs/${encodeURIComponent(source)}/${encodeURIComponent(sourceJobId)}`);
+    const res = await fetch(`${BASE_URL}/api/jobs/${encodeURIComponent(source)}/${encodeURIComponent(sourceJobId)}`, { headers: authHeaders() });
     if (!res.ok) return { status: "error", message: `API ${res.status}` };
     const body: { found: boolean; job?: JobDto; message?: string } = await res.json();
     if (!body.found || !body.job) return { status: "error", message: body.message ?? "Not found" };
@@ -105,7 +110,7 @@ export async function fetchJobDetail(source: string, sourceJobId: string): Promi
 }
 
 export async function getConfig(): Promise<Record<string, string>> {
-  const res = await fetch(`${BASE_URL}/api/config`);
+  const res = await fetch(`${BASE_URL}/api/config`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch config");
   return res.json();
 }
@@ -113,7 +118,7 @@ export async function getConfig(): Promise<Record<string, string>> {
 export async function saveConfig(config: Record<string, string>): Promise<void> {
   const res = await fetch(`${BASE_URL}/api/config`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(config),
   });
   if (!res.ok) throw new Error("Failed to save config");
@@ -122,7 +127,7 @@ export async function saveConfig(config: Record<string, string>): Promise<void> 
 export type CvUploadMode = "replace" | "rename";
 
 export async function fetchCvs(): Promise<CvFile[]> {
-  const res = await fetch(`${BASE_URL}/api/cvs`);
+  const res = await fetch(`${BASE_URL}/api/cvs`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch CV files");
   return res.json();
 }
@@ -135,6 +140,7 @@ export async function uploadCv(file: File, mode: CvUploadMode, targetName: strin
 
   const res = await fetch(`${BASE_URL}/api/cvs/upload`, {
     method: "POST",
+    headers: authHeaders(),
     body: form,
   });
 
@@ -143,5 +149,21 @@ export async function uploadCv(file: File, mode: CvUploadMode, targetName: strin
     throw new Error(body.message ?? "Failed to upload CV");
   }
 
+  return res.json();
+}
+
+export async function fetchApplication(source: string, sourceJobId: string): Promise<JobApplication> {
+  const res = await fetch(`${BASE_URL}/api/jobs/${encodeURIComponent(source)}/${encodeURIComponent(sourceJobId)}/application`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch application status");
+  return res.json();
+}
+
+export async function saveApplication(source: string, sourceJobId: string, status: ApplicationStatus, notes: string): Promise<JobApplication> {
+  const res = await fetch(`${BASE_URL}/api/jobs/${encodeURIComponent(source)}/${encodeURIComponent(sourceJobId)}/application`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ status, notes }),
+  });
+  if (!res.ok) throw new Error("Failed to save application status");
   return res.json();
 }

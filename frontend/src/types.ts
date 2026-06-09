@@ -41,3 +41,13 @@ export interface CvFile {
   sizeBytes: number;
   updatedAtUtc: string;
 }
+
+export type ApplicationStatus = "New" | "Interested" | "Applied" | "FollowUp" | "Interview" | "Rejected" | "Offer";
+
+export interface JobApplication {
+  source: string;
+  sourceJobId: string;
+  status: ApplicationStatus;
+  notes: string;
+  updatedAt: string;
+}

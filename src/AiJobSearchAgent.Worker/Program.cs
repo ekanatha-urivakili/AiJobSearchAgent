@@ -97,7 +97,7 @@ static async Task RunOnceAsync(CancellationToken cancellationToken)
         sources,
         new SourcePolicyGuard(policies),
         new JobFilterEngine(),
-        new CvMatchScorer()).RunAsync(criteria, profile, cancellationToken);
+        new CvMatchScorer(today)).RunAsync(criteria, profile, cancellationToken);
 
     // ── write report ──────────────────────────────────────────────────────────
     var repoRoot = FindRepoRoot() ?? Directory.GetCurrentDirectory();

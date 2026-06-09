@@ -28,6 +28,15 @@ public sealed record GetJobResponse(bool Found, JobDto? Job, string? Message);
 
 public sealed record GenerateReportResponse(string RunId, string ReportResource, string Markdown);
 
+public sealed record JobApplicationDto(
+    string Source,
+    string SourceJobId,
+    string Status,
+    string Notes,
+    DateTimeOffset UpdatedAt);
+
+public sealed record SaveJobApplicationRequest(string Status, string? Notes);
+
 public sealed record SourceHealthResponse(IReadOnlyCollection<SourceHealthDto> Sources);
 
 public sealed record SourceHealthDto(

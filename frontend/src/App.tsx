@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
-import { fetchCvs, fetchJobDetail, fetchMatches, getConfig, saveConfig, uploadCv } from "./api";
-import type { CvFile, JobDetail, JobResult, SourceStatus } from "./types";
+import { fetchApplication, fetchCvs, fetchJobDetail, fetchMatches, getConfig, saveApplication, saveConfig, uploadCv } from "./api";
+import type { ApplicationStatus, CvFile, JobApplication, JobDetail, JobResult, SourceStatus } from "./types";
 import type { ReactElement } from "react";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -233,6 +233,8 @@ const SORT_OPTIONS: Array<{ label: string; value: SortMode }> = [
   { label: "Title A–Z",         value: "title-asc" },
 ];
 
+const APPLICATION_STATUSES: ApplicationStatus[] = ["New", "Interested", "Applied", "FollowUp", "Interview", "Rejected", "Offer"];
+
 type ConfigField = {
   key: string;
   label: string;
@@ -428,6 +430,10 @@ function DetailPage(): ReactElement {
   const { jobs } = useAppData();
 
   const [detail, setDetail]   = useState<JobDetail | null>(null);
+  const [application, setApplication] = useState<JobApplication | null>(null);
+  const [applicationStatus, setApplicationStatus] = useState<ApplicationStatus>("New");
+  const [applicationNotes, setApplicationNotes] = useState("");
+  const [savingApplication, setSavingApplication] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -457,9 +463,31 @@ function DetailPage(): ReactElement {
       }
       setLoading(false);
     });
+    fetchApplication(source, sourceJobId)
+      .then(value => {
+        setApplication(value);
+        setApplicationStatus(value.status);
+        setApplicationNotes(value.notes);
+      })
+      .catch(() => {
+        setApplication(null);
+        setApplicationStatus("New");
+        setApplicationNotes("");
+      });
   }, [source, sourceJobId, cached]);
 
   const job = detail ?? (cached ? { ...cached, description: "" } : null);
+
+  async function handleSaveApplication() {
+    if (!source || !sourceJobId) return;
+    setSavingApplication(true);
+    try {
+      const saved = await saveApplication(source, sourceJobId, applicationStatus, applicationNotes);
+      setApplication(saved);
+    } finally {
+      setSavingApplication(false);
+    }
+  }
 
   return (
     <div className="page-content">
@@ -553,6 +581,29 @@ function DetailPage(): ReactElement {
                   ) : (
                     <button className="apply-btn" disabled>No advert URL</button>
                   )}
+                </div>
+
+                <div className="detail-card">
+                  <h3>Pipeline</h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <select
+                      className="settings-select"
+                      value={applicationStatus}
+                      onChange={e => setApplicationStatus(e.target.value as ApplicationStatus)}
+                    >
+                      {APPLICATION_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                    <textarea
+                      placeholder="Recruiter, apply link, follow-up date, or interview notes"
+                      rows={4}
+                      value={applicationNotes}
+                      onChange={e => setApplicationNotes(e.target.value)}
+                    />
+                    <button className="save-btn compact" disabled={savingApplication} onClick={handleSaveApplication} type="button">
+                      {savingApplication ? "Saving..." : "Save status"}
+                    </button>
+                    {application && <small style={{ color: "var(--text-dim)" }}>Updated {fmtDate(application.updatedAt.slice(0, 10))}</small>}
+                  </div>
                 </div>
 
                 <div className="detail-card">
@@ -721,6 +772,16 @@ function SettingsPage(): ReactElement {
                   onChange={set("JOB_SEARCH_SKILLS")}
                 />
                 <span className="field-hint">Comma-separated skills used to score CV match against job listings.</span>
+              </div>
+              <div className="form-field">
+                <label>Excluded Keywords</label>
+                <textarea
+                  rows={3}
+                  placeholder="graduate, junior, java only, onsite 5 days, sc clearance"
+                  value={config["JOB_SEARCH_EXCLUDED_KEYWORDS"] ?? ""}
+                  onChange={set("JOB_SEARCH_EXCLUDED_KEYWORDS")}
+                />
+                <span className="field-hint">Comma-separated terms rejected before scoring.</span>
               </div>
             </div>
           </div>

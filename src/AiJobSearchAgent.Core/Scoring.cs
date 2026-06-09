@@ -2,6 +2,13 @@ namespace AiJobSearchAgent.Core;
 
 public sealed class CvMatchScorer
 {
+    private readonly DateOnly today;
+
+    public CvMatchScorer(DateOnly? today = null)
+    {
+        this.today = today ?? DateOnly.FromDateTime(DateTime.UtcNow);
+    }
+
     public JobMatch Score(JobPosting job, CvProfile profile)
     {
         var haystack = $"{job.Title} {job.Description}".ToLowerInvariant();
@@ -14,7 +21,7 @@ public sealed class CvMatchScorer
         score += Math.Min(20, leadershipMatches.Length * 5);
         score += Math.Min(15, domainMatches.Length * 5);
         score += job.WorkMode == WorkMode.Remote || job.DistanceMiles <= 30 ? 5 : 3;
-        score += job.PostedDate >= DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3) ? 5 : 3;
+        score += job.PostedDate >= today.AddDays(-3) ? 5 : 3;
         score += CompensationScore(job);
 
         var reasons = new List<string>();

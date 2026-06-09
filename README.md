@@ -12,9 +12,10 @@ Open the **Settings** page in the dashboard (`http://localhost:5173/settings`) a
 
 1. **Job Profile** — your desired designations (e.g. `Senior Software Engineer, Lead Developer`) and the skills you want matched against job listings (e.g. `C#, React, AWS`). These are saved as `JOB_SEARCH_DESIRED_DESIGNATION` and `JOB_SEARCH_SKILLS`.
 2. **Search Criteria** — postcode, radius, posting age, salary/day-rate floors, contract minimums.
-3. **Reed API Key** — enables live job fetching from Reed.co.uk.
-4. **Gmail Integration** — service account JSON + mailbox email, so the agent can read job alert emails.
-5. **Slack Webhook** — optional; posts top matches (score ≥ 85) to a channel.
+3. **Excluded Keywords** — noisy phrases rejected before scoring, such as `graduate`, `java only`, or `sc clearance`.
+4. **Reed API Key** — enables live job fetching from Reed.co.uk.
+5. **Gmail Integration** — service account JSON + mailbox email, so the agent can read job alert emails.
+6. **Slack Webhook** — optional; posts top matches (score ≥ 85) to a channel.
 
 Saved values are persisted to PostgreSQL (secrets encrypted with AES-256-GCM) and immediately applied as environment variables in the running server process.
 
@@ -24,7 +25,7 @@ When `AiJobSearchAgent.McpServer --http` starts:
 
 1. Connects to PostgreSQL and ensures the `app_settings` table exists.
 2. Reads all stored settings and calls `Environment.SetEnvironmentVariable` for each key — so `Defaults.CreateCriteria()` and `Defaults.CreateCvProfile()` pick up your saved profile without a restart.
-3. Starts the HTTP API on `localhost:5001` (and CORS-allows the Vite dev server).
+3. Starts the HTTP API on `localhost:5001` by default (and CORS-allows the Vite dev server). Remote callers must supply `JOB_AGENT_API_KEY`.
 
 ### Step 3 — A search run is triggered
 
@@ -56,8 +57,9 @@ A search run can be triggered three ways:
 
 1. **Posted date** — must be within `JOB_SEARCH_POSTED_WITHIN_DAYS` (default 7).
 2. **Distance** — must be within `JOB_SEARCH_RADIUS_MILES` of `JOB_SEARCH_POSTCODE` (remote jobs bypass this).
-3. **Title match** — title must contain one of the configured designations from `JOB_SEARCH_DESIRED_DESIGNATION`.
-4. **Salary / day rate** — permanent roles at or above `JOB_SEARCH_MIN_PERMANENT_SALARY_GBP`; contract roles at or above `JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP` and `JOB_SEARCH_MIN_CONTRACT_MONTHS`. Roles without published pay are passed through.
+3. **Excluded keywords** — title and description must not contain `JOB_SEARCH_EXCLUDED_KEYWORDS`.
+4. **Title match** — title must contain one of the configured designations from `JOB_SEARCH_DESIRED_DESIGNATION`.
+5. **Salary / day rate** — permanent roles at or above `JOB_SEARCH_MIN_PERMANENT_SALARY_GBP`; contract roles at or above `JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP` and `JOB_SEARCH_MIN_CONTRACT_MONTHS`. Roles without published pay are passed through.
 
 Jobs failing any check are counted in the **Rejection Summary** visible on the dashboard.
 
@@ -81,7 +83,7 @@ Scoring thresholds:
 
 ### Step 7 — Results are deduplicated and cached
 
-Jobs are deduplicated by `(source, sourceJobId)` to prevent the same posting appearing from multiple sources. The final `SearchRunResult` is stored in memory in `JobSearchMcpService` and served instantly on subsequent `GET /api/jobs/results` calls until the next search run.
+Jobs are deduplicated by `(source, sourceJobId)` to prevent duplicate postings per source. Search runs, matched postings, match reasons, and content hashes are persisted to PostgreSQL when `DATABASE_URL` is configured. The final `SearchRunResult` is also cached in memory in `JobSearchMcpService` and served instantly on subsequent `GET /api/jobs/results` calls until the next search run.
 
 ### Step 8 — Reports and alerts are sent
 
@@ -97,6 +99,7 @@ The React dashboard at `http://localhost:5173` shows:
 - **Dashboard** — top picks, source status, rejection summary.
 - **Browse Jobs** — filter by work mode, employment type, location, salary, and quality. Sort by score, date, or salary.
 - **Job Detail** — full description, CV match reasons, risks, and a direct link to the original advert.
+- **Pipeline Status** — mark each job as new, interested, applied, follow-up, interview, rejected, or offer with notes.
 
 ---
 
@@ -319,6 +322,7 @@ sequenceDiagram
 | Min permanent salary | £75,000/yr | `JOB_SEARCH_MIN_PERMANENT_SALARY_GBP` |
 | Min contract day rate | £400/day | `JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP` |
 | Min contract duration | 6 months | `JOB_SEARCH_MIN_CONTRACT_MONTHS` |
+| Excluded keywords | `graduate,junior,java only,onsite 5 days,5 days onsite,sc clearance` | `JOB_SEARCH_EXCLUDED_KEYWORDS` |
 | Time zone | `Europe/London` | `JOB_SEARCH_TIME_ZONE` |
 | Run time | `10:00` | `JOB_SEARCH_RUN_AT` |
 | Gmail mailbox user | _(none)_ | `GMAIL_USER_EMAIL` |
@@ -331,6 +335,8 @@ sequenceDiagram
 Copy `.env.example` to `.env` and fill in the secrets. The HTTP server reads this file at startup via `CredentialProvider`. All values can also be set as real environment variables; real environment variables take priority over `.env`.
 
 The Settings screen can persist configurable values to PostgreSQL through `POST /api/config`. Secret settings are encrypted in the `app_settings` table with AES-256-GCM and require `SETTINGS_ENCRYPTION_KEY`.
+
+The HTTP API binds to `localhost:5001` by default. Set `JOB_AGENT_HTTP_HOST=0.0.0.0` only when exposing it through a trusted network boundary, and set `JOB_AGENT_API_KEY` so callers must send `X-Job-Agent-Key` or `Authorization: Bearer <key>`. The frontend can send the key with `VITE_JOB_AGENT_API_KEY`.
 
 Generate a local encryption key with:
 
@@ -442,7 +448,7 @@ The buffer is process-local. Restarting `AiJobSearchAgent.McpServer` clears it, 
 
 The React dashboard includes a **Settings** screen where you can configure:
 
-- Search schedule, postcode, radius, posting age, salary floor, day-rate floor, and minimum contract months.
+- Search schedule, postcode, radius, posting age, salary floor, day-rate floor, minimum contract months, and excluded keywords.
 - `REED_API_KEY`.
 - Slack webhook URL.
 - Gmail service-account JSON, delegated mailbox user, and Gmail search query.
@@ -460,7 +466,7 @@ Allowed extensions:
 - `.docx`
 - `.md`
 
-When a CV already exists, the UI asks whether to replace an existing file or add the upload with a new filename. The backend also validates extensions and sanitizes filenames in `POST /api/cvs/upload`.
+When a CV already exists, the UI asks whether to replace an existing file or add the upload with a new filename. The backend also validates extensions, checks basic file signatures, enforces a 5 MB limit, and sanitizes filenames in `POST /api/cvs/upload`.
 
 ## Run Locally
 
@@ -558,6 +564,7 @@ JOB_SEARCH_POSTED_WITHIN_DAYS=7
 JOB_SEARCH_MIN_PERMANENT_SALARY_GBP=75000
 JOB_SEARCH_MIN_CONTRACT_DAY_RATE_GBP=400
 JOB_SEARCH_MIN_CONTRACT_MONTHS=6
+JOB_SEARCH_EXCLUDED_KEYWORDS=graduate,junior,java only,onsite 5 days,5 days onsite,sc clearance
 JOB_SEARCH_DESIRED_DESIGNATION=Senior Software Engineer,Lead Developer,Principal Engineer
 JOB_SEARCH_SKILLS=c#,asp.net core,react,typescript,aws,docker
 REED_API_KEY=<redacted>
@@ -566,6 +573,8 @@ GMAIL_CREDENTIALS_JSON=<redacted>
 GMAIL_USER_EMAIL=you@your-domain.com
 GMAIL_SEARCH_QUERY=label:job-alerts is:unread
 INDEED_GMAIL_SEARCH_QUERY=from:jobalerts-noreply@indeed.com is:unread
+JOB_AGENT_HTTP_HOST=localhost
+JOB_AGENT_API_KEY=<set when exposing the HTTP API beyond localhost>
 ```
 
 The HTTP settings API and React dashboard are local developer tooling unless you add separate Railway web services for `AiJobSearchAgent.McpServer` and the frontend.

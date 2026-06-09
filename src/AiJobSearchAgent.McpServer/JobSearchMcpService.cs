@@ -7,6 +7,7 @@ public sealed class JobSearchMcpService
 {
     private readonly CredentialProvider credentials;
     private readonly IHttpClientFactory httpClientFactory;
+    private readonly JobRunRepository jobRunRepository;
     private readonly TimeProvider timeProvider;
 
     private volatile ConcurrentDictionary<string, JobPosting> cache = new(StringComparer.OrdinalIgnoreCase);
@@ -18,10 +19,15 @@ public sealed class JobSearchMcpService
     private sealed record RunState(SearchRunResult Result, JobSearchCriteria Criteria, string RunId, string Report);
     private volatile RunState? latest;
 
-    public JobSearchMcpService(CredentialProvider credentials, IHttpClientFactory httpClientFactory, TimeProvider timeProvider)
+    public JobSearchMcpService(
+        CredentialProvider credentials,
+        IHttpClientFactory httpClientFactory,
+        JobRunRepository jobRunRepository,
+        TimeProvider timeProvider)
     {
         this.credentials = credentials;
         this.httpClientFactory = httpClientFactory;
+        this.jobRunRepository = jobRunRepository;
         this.timeProvider = timeProvider;
     }
 
@@ -38,7 +44,7 @@ public sealed class JobSearchMcpService
             sources,
             new SourcePolicyGuard(policies),
             new JobFilterEngine(),
-            new CvMatchScorer()).RunAsync(criteria, Defaults.CreateCvProfile(), cancellationToken);
+            new CvMatchScorer(today)).RunAsync(criteria, Defaults.CreateCvProfile(), cancellationToken);
 
         var runId = Guid.CreateVersion7().ToString();
         var report = new MarkdownReportGenerator().Generate(result, criteria);
@@ -59,6 +65,7 @@ public sealed class JobSearchMcpService
         latest = new RunState(result, criteria, runId, report);
         cache = newCache;
         lastStatus = newStatus;
+        await jobRunRepository.SaveRunAsync(Guid.Parse(runId), result, cancellationToken);
 
         return new(
             runId,
